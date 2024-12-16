@@ -9,8 +9,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	const logFilePath = config.get<string>('logFilePath');
+
+	if (!logFilePath) {
+		logError('Log file path is not configured. Please set the log file path in the settings.');
+		return;
+	}
+
 	const logFile = config.get<string>('logFile')!;
-	const diagnosticLogFile = config.get<string>('diagnosticLogFile')!;
 
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
@@ -29,7 +34,7 @@ export function activate(context: vscode.ExtensionContext) {
 				logInfo(`Log file path set to: ${selectedPath}`);
 			}
 		} catch (err) {
-			logError('Failed to set log file path:', '', err);
+			logError('Failed to set log file path:', err);
 		}
 	});
 
@@ -45,6 +50,10 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
+	if (!gitExtension) {
+		logError('Git extension is not available. Please ensure Git is installed and the Git extension is enabled.');
+		return;
+	}
 	const api = gitExtension.getAPI(1);
 
 	if (api) {
@@ -82,9 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
 						await pushChanges(logFilePath, trackingFilePath, branch);
 						logInfo('Changes pushed to the tracking repository');
 					} catch (err) {
-						const diagnosticLogFilePath = path.join(logFilePath, diagnosticLogFile);
-						ensureDirectoryExists(diagnosticLogFilePath);
-						logError('Failed to process commit:', diagnosticLogFilePath, err);
+						logError('Failed to process commit:', err);
 					}
 				}
 			});
