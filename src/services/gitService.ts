@@ -13,7 +13,7 @@ export async function getCommitMessage(repoPath: string, commitId: string): Prom
   });
 }
 
-export async function pushChanges(repoPath: string, logFilePath: string, branch: string): Promise<void> {
+export async function pushChanges(repoPath: string, trackingFilePath: string, branch: string): Promise<void> {
   const git: SimpleGit = simpleGit(repoPath);
   const remotes = await git.getRemotes(true);
   const hasOrigin = remotes.some(remote => remote.name === 'origin');
@@ -22,7 +22,7 @@ export async function pushChanges(repoPath: string, logFilePath: string, branch:
     throw new Error('No origin remote configured for the repository.');
   }
 
-  await git.add(logFilePath);
+  await git.add(trackingFilePath);
   await git.commit('Update commit log');
   await git.push('origin', branch);
 }

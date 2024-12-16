@@ -29,6 +29,16 @@
           "type": "string",
           "default": "",
           "description": "The path to the log file where commit details are stored."
+        },
+        "commitTracker.logFile": {
+          "type": "string",
+          "default": "commits.log",
+          "description": "The name of the log file where commit details are stored."
+        },
+        "commitTracker.diagnosticLogFile": {
+          "type": "string",
+          "default": "diagnostic.log",
+          "description": "The name of the log file where diagnostic messages are stored."
         }
       }
     }

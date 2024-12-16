@@ -9,6 +9,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	const logFilePath = config.get<string>('logFilePath');
+	const logFile = config.get<string>('logFile')!;
+	const diagnosticLogFile = config.get<string>('diagnosticLogFile')!;
+
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
 	const disposable = vscode.commands.registerCommand('commit-tracker.setLogFilePath', async () => {
@@ -20,7 +23,7 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 
 		if (uri && uri[0]) {
-			const selectedPath = path.join(uri[0].fsPath, 'commits.log');
+			const selectedPath = uri[0].fsPath;
 			await config.update('logFilePath', selectedPath, vscode.ConfigurationTarget.Global);
 			logInfo(`Log file path set to: ${selectedPath}`);
 		}
@@ -52,13 +55,15 @@ export function activate(context: vscode.ExtensionContext) {
 					await context.globalState.update('lastProcessedCommit', headCommit);
 
 					try {
-						const commitMessage = await getCommitMessage(repoPath, headCommit);
-						const logMessage = `Commit: ${headCommit}\nMessage: ${commitMessage}\nBranch: ${branch}\nRepository Path: ${repoPath}\n\n`;
+						const message = await getCommitMessage(repoPath, headCommit);
+						const commitDate = new Date().toISOString();
+						const logMessage = `Commit: ${headCommit}\nMessage: ${message}\nDate: ${commitDate}\nBranch: ${branch}\nRepository Path: ${repoPath}\n\n`;
 
 						logInfo(logMessage);
 
 						// Ensure the directory exists
-						ensureDirectoryExists(logFilePath);
+						const trackingFilePath = path.join(logFilePath, logFile);
+						ensureDirectoryExists(trackingFilePath);
 
 						if (branch === 'main' || branch === 'master') {
 							logInfo(`Skipping logging for branch: ${branch}`);
@@ -66,14 +71,16 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 
 						// Append commit details to the log file
-						await appendToFile(logFilePath, logMessage);
+						await appendToFile(trackingFilePath, logMessage);
 						logInfo('Commit details logged to commits.log');
 
 						// Push changes to the remote repository
-						await pushChanges(repoPath, logFilePath, branch);
+						await pushChanges(logFilePath, trackingFilePath, branch);
 						logInfo('Changes pushed to the tracking repository');
 					} catch (err) {
-						logError('Failed to process commit:', err);
+						const diagnosticLogFilePath = path.join(logFilePath, diagnosticLogFile);
+						ensureDirectoryExists(diagnosticLogFilePath);
+						logError('Failed to process commit:', diagnosticLogFilePath, err);
 					}
 				}
 			});
