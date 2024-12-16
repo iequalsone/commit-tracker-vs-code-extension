@@ -1,8 +1,7 @@
-import { exec } from 'child_process';
 import * as vscode from 'vscode';
-import * as fs from 'fs';
 import * as path from 'path';
-import simpleGit, { SimpleGit } from 'simple-git';
+import { getCommitMessage, pushChanges } from './services/gitService';
+import { ensureDirectoryExists, appendToFile } from './services/fileService';
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('Congratulations, your extension "commit-tracker" is now active!');
@@ -59,8 +58,7 @@ export function activate(context: vscode.ExtensionContext) {
 						console.log(logMessage);
 
 						// Ensure the directory exists
-						const logDir = path.dirname(logFilePath);
-						fs.mkdirSync(logDir, { recursive: true });
+						ensureDirectoryExists(logFilePath);
 
 						if (branch === 'main' || branch === 'master') {
 							console.log(`Skipping logging for branch: ${branch}`);
@@ -68,37 +66,12 @@ export function activate(context: vscode.ExtensionContext) {
 						}
 
 						// Append commit details to the log file
-						fs.appendFile(logFilePath, logMessage, async (err) => {
-							if (err) {
-								console.error('Failed to write to commits.log:', err);
-								vscode.window.showErrorMessage('Failed to write to commits.log. Please check the log file path and permissions.');
-								return;
-							} else {
-								console.log('Commit details logged to commits.log');
+						await appendToFile(logFilePath, logMessage);
+						console.log('Commit details logged successfully.');
 
-								// Use simple-git to push changes to the tracking repository
-								const git: SimpleGit = simpleGit(logDir);
-								try {
-									const remotes = await git.getRemotes(true);
-									const hasOrigin = remotes.some(remote => remote.name === 'origin');
-
-									await git.add(logFilePath);
-									await git.commit('Update commit log');
-
-									if (hasOrigin) {
-										await git.push('origin', branch);
-										console.log('Changes pushed to the tracking repository');
-									} else {
-										console.error('No origin remote configured for the repository.');
-										vscode.window.showErrorMessage('Cannot push. No origin remote configured for the repository.');
-										return;
-									}
-								} catch (pushErr) {
-									console.error('Failed to push changes:', pushErr);
-									vscode.window.showErrorMessage('Failed to push changes to the tracking repository. Please check your Git configuration.');
-								}
-							}
-						});
+						// Push changes to the remote repository
+						await pushChanges(repoPath, logFilePath, branch);
+						console.log('Changes pushed successfully.');
 					} catch (err) {
 						console.error('Failed to get commit message:', err);
 						vscode.window.showErrorMessage('Failed to get commit message. Please check your Git configuration.');
@@ -107,18 +80,6 @@ export function activate(context: vscode.ExtensionContext) {
 			});
 		});
 	}
-}
-
-async function getCommitMessage(repoPath: string, commitId: string): Promise<string> {
-	return new Promise((resolve, reject) => {
-		exec(`git show -s --format=%B ${commitId}`, { cwd: repoPath }, (err, stdout) => {
-			if (err) {
-				reject(err);
-			} else {
-				resolve(stdout.trim());
-			}
-		});
-	});
 }
 
 export function deactivate() { }
