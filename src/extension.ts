@@ -15,17 +15,21 @@ export function activate(context: vscode.ExtensionContext) {
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
 	const disposable = vscode.commands.registerCommand('commit-tracker.setLogFilePath', async () => {
-		const uri = await vscode.window.showOpenDialog({
-			canSelectFiles: false,
-			canSelectFolders: true,
-			canSelectMany: false,
-			openLabel: 'Select Log File Folder'
-		});
+		try {
+			const uri = await vscode.window.showOpenDialog({
+				canSelectFiles: false,
+				canSelectFolders: true,
+				canSelectMany: false,
+				openLabel: 'Select Log File Folder'
+			});
 
-		if (uri && uri[0]) {
-			const selectedPath = uri[0].fsPath;
-			await config.update('logFilePath', selectedPath, vscode.ConfigurationTarget.Global);
-			logInfo(`Log file path set to: ${selectedPath}`);
+			if (uri && uri[0]) {
+				const selectedPath = uri[0].fsPath;
+				await config.update('logFilePath', selectedPath, vscode.ConfigurationTarget.Global);
+				logInfo(`Log file path set to: ${selectedPath}`);
+			}
+		} catch (err) {
+			logError('Failed to set log file path:', '', err);
 		}
 	});
 
