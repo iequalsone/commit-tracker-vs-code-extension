@@ -1,21 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-export function ensureDirectoryExists(filePath: string): void {
+export function ensureDirectoryExists(filePath: string): Promise<void> {
   const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
+  return fs.promises.mkdir(dir, { recursive: true }).then(() => undefined);
 }
 
 export function appendToFile(filePath: string, content: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    fs.appendFile(filePath, content, (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
-  });
+  return fs.promises.appendFile(filePath, content);
 }
 
 export function validatePath(filePath: string): boolean {
