@@ -1,9 +1,12 @@
 import { exec } from 'child_process';
 import simpleGit, { SimpleGit } from 'simple-git';
+import shellEscape from 'shell-escape';
 
 export async function getCommitMessage(repoPath: string, commitId: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    exec(`git show -s --format=%B ${commitId}`, { cwd: repoPath }, (err, stdout) => {
+    const sanitizedRepoPath = shellEscape([repoPath]);
+    const sanitizedCommitId = shellEscape([commitId]);
+    exec(`git show -s --format=%B ${sanitizedCommitId}`, { cwd: sanitizedRepoPath }, (err, stdout) => {
       if (err) {
         reject(err);
       } else {
