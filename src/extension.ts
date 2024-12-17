@@ -4,9 +4,10 @@ import { getCommitMessage, pushChanges } from './services/gitService';
 import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
+import { DisposableManager } from './utils/DisposableManager';
 
 export function activate(context: vscode.ExtensionContext) {
-	console.log('Congratulations, your extension "commit-tracker" is now active!');
+	const disposableManager = DisposableManager.getInstance();
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	const logFilePath = config.get<string>('logFilePath');
@@ -37,6 +38,7 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(disposable);
+	disposableManager.register(disposable);
 
 	if (!logFilePath) {
 		vscode.window.showWarningMessage('Please configure the log file path for Commit Tracker.', 'Open Settings').then(selection => {
@@ -123,9 +125,15 @@ export function activate(context: vscode.ExtensionContext) {
 				}
 			}, 300); // Adjust the debounce delay as needed
 
-			repo.state.onDidChange(debouncedOnDidChange);
+			const listener = repo.state.onDidChange(debouncedOnDidChange);
+			const disposableListener = { dispose: () => listener };
+			context.subscriptions.push(disposableListener);
+			disposableManager.register(disposableListener);
 		});
 	}
 }
 
-export function deactivate() { }
+export function deactivate(): void {
+	// Clean up all registered disposables
+	DisposableManager.getInstance().dispose();
+}
