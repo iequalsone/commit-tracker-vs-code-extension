@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getCommitMessage, pushChanges } from './services/gitService';
-import { ensureDirectoryExists, appendToFile } from './services/fileService';
+import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -11,7 +11,6 @@ export function activate(context: vscode.ExtensionContext) {
 	const logFilePath = config.get<string>('logFilePath');
 	const logFile = config.get<string>('logFile')!;
 	const excludedBranches = config.get<string[]>('excludedBranches')!;
-
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
 	const disposable = vscode.commands.registerCommand('commit-tracker.setLogFilePath', async () => {
@@ -25,6 +24,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 			if (uri && uri[0]) {
 				const selectedPath = uri[0].fsPath;
+				if (!validatePath(selectedPath)) {
+					throw new Error('Invalid log file path.');
+				}
 				await config.update('logFilePath', selectedPath, vscode.ConfigurationTarget.Global);
 				logInfo(`Log file path set to: ${selectedPath}`);
 			}
@@ -85,6 +87,9 @@ export function activate(context: vscode.ExtensionContext) {
 					// Ensure the directory exists
 					const trackingFilePath = path.join(logFilePath, logFile);
 					try {
+						if (!validatePath(trackingFilePath)) {
+							throw new Error('Invalid tracking file path.');
+						}
 						ensureDirectoryExists(trackingFilePath);
 					} catch (err) {
 						logError('Failed to ensure directory exists:', err);

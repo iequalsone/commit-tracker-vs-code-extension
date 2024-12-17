@@ -17,3 +17,7 @@ export function appendToFile(filePath: string, content: string): Promise<void> {
     });
   });
 }
+
+export function validatePath(filePath: string): boolean {
+  return path.isAbsolute(filePath) && !filePath.includes('..');
+}
