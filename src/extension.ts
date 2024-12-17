@@ -3,6 +3,7 @@ import * as path from 'path';
 import { getCommitMessage, pushChanges } from './services/gitService';
 import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
+import { debounce } from './utils/debounce';
 
 export function activate(context: vscode.ExtensionContext) {
 	console.log('Congratulations, your extension "commit-tracker" is now active!');
@@ -59,8 +60,72 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	if (api) {
+		// api.repositories.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
+		// 	repo.state.onDidChange(async () => {
+		// 		const headCommit = repo.state.HEAD?.commit;
+		// 		const branch = repo.state.HEAD?.name;
+		// 		const repoPath = repo.rootUri.fsPath;
+
+		// 		if (!headCommit) {
+		// 			logError('No HEAD commit found. Please ensure the repository is in a valid state.');
+		// 			return;
+		// 		}
+
+		// 		if (headCommit === lastProcessedCommit) {
+		// 			return;
+		// 		}
+
+		// 		lastProcessedCommit = headCommit;
+		// 		await context.globalState.update('lastProcessedCommit', headCommit);
+
+		// 		try {
+		// 			const message = await getCommitMessage(repoPath, headCommit);
+		// 			const commitDate = new Date().toISOString();
+		// 			const logMessage = `Commit: ${headCommit}\nMessage: ${message}\nDate: ${commitDate}\nBranch: ${branch}\nRepository Path: ${repoPath}\n\n`;
+
+		// 			logInfo(logMessage);
+
+		// 			// Ensure the directory exists
+		// 			const trackingFilePath = path.join(logFilePath, logFile);
+		// 			try {
+		// 				if (!validatePath(trackingFilePath)) {
+		// 					throw new Error('Invalid tracking file path.');
+		// 				}
+		// 				ensureDirectoryExists(trackingFilePath);
+		// 			} catch (err) {
+		// 				logError('Failed to ensure directory exists:', err);
+		// 				return;
+		// 			}
+
+		// 			if (excludedBranches.includes(branch)) {
+		// 				logInfo(`Skipping logging for branch: ${branch}`);
+		// 				return;
+		// 			}
+
+		// 			// Append commit details to the log file
+		// 			try {
+		// 				await appendToFile(trackingFilePath, logMessage);
+		// 				logInfo('Commit details logged to commits.log');
+		// 			} catch (err) {
+		// 				logError('Failed to write to commits.log:', err);
+		// 				return;
+		// 			}
+
+		// 			// Push changes to the remote repository
+		// 			try {
+		// 				await pushChanges(logFilePath, trackingFilePath, branch);
+		// 				logInfo('Changes pushed to the tracking repository');
+		// 			} catch (err) {
+		// 				logError('Failed to push changes to the tracking repository:', err);
+		// 			}
+		// 		} catch (err) {
+		// 			logError('Failed to process commit:', err);
+		// 		}
+		// 	});
+		// });
+
 		api.repositories.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
-			repo.state.onDidChange(async () => {
+			const debouncedOnDidChange = debounce(async () => {
 				const headCommit = repo.state.HEAD?.commit;
 				const branch = repo.state.HEAD?.name;
 				const repoPath = repo.rootUri.fsPath;
@@ -112,7 +177,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 					// Push changes to the remote repository
 					try {
-						await pushChanges(logFilePath, trackingFilePath, branch);
+						await pushChanges(repoPath, trackingFilePath, branch);
 						logInfo('Changes pushed to the tracking repository');
 					} catch (err) {
 						logError('Failed to push changes to the tracking repository:', err);
@@ -120,7 +185,9 @@ export function activate(context: vscode.ExtensionContext) {
 				} catch (err) {
 					logError('Failed to process commit:', err);
 				}
-			});
+			}, 300); // Adjust the debounce delay as needed
+
+			repo.state.onDidChange(debouncedOnDidChange);
 		});
 	}
 }
