@@ -9,13 +9,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	const logFilePath = config.get<string>('logFilePath');
-
-	if (!logFilePath) {
-		logError('Log file path is not configured. Please set the log file path in the settings.');
-		return;
-	}
-
 	const logFile = config.get<string>('logFile')!;
+	const excludedBranches = config.get<string[]>('excludedBranches')!;
 
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
@@ -96,7 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
 						return;
 					}
 
-					if (branch === 'main' || branch === 'master') {
+					if (excludedBranches.includes(branch)) {
 						logInfo(`Skipping logging for branch: ${branch}`);
 						return;
 					}

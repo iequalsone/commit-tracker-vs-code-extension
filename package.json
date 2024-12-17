@@ -39,6 +39,17 @@
           "type": "string",
           "default": "diagnostic.log",
           "description": "The name of the log file where diagnostic messages are stored."
+        },
+        "commitTracker.excludedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master"
+          ],
+          "description": "Branches to exclude from logging."
         }
       }
     }
