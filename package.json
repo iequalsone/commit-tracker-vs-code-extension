@@ -25,6 +25,11 @@
     "configuration": {
       "type": "object",
       "properties": {
+        "commitTracker.enableNotifications": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable notifications"
+        },
         "commitTracker.logFilePath": {
           "type": "string",
           "default": "",

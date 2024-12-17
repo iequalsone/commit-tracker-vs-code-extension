@@ -4,8 +4,12 @@ import path from 'path';
 import { ensureDirectoryExists } from '../services/fileService';
 
 export function logInfo(message: string): void {
+  const config = vscode.workspace.getConfiguration('commitTracker');
+  const showNotifications = config.get<boolean>('enableNotifications');
   console.log(message);
-  vscode.window.showInformationMessage(message);
+  if (showNotifications) {
+    vscode.window.showInformationMessage(message);
+  }
 }
 
 export function logError(message: string, error?: any): void {

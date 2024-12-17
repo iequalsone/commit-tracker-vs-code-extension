@@ -1,13 +1,14 @@
 import { exec } from 'child_process';
-import simpleGit, { SimpleGit } from 'simple-git';
+import { simpleGit, SimpleGit } from 'simple-git';
 import shellEscape from 'shell-escape';
 import * as vscode from 'vscode';
 
 export async function getCommitMessage(repoPath: string, commitId: string): Promise<string> {
   return vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification,
+    location: vscode.ProgressLocation.SourceControl,
     title: 'Fetching commit message...',
-    cancellable: false
+    cancellable: false,
+
   }, async (progress, token) => {
     return new Promise((resolve, reject) => {
       const sanitizedRepoPath = shellEscape([repoPath]);
@@ -25,7 +26,7 @@ export async function getCommitMessage(repoPath: string, commitId: string): Prom
 
 export async function pushChanges(repoPath: string, trackingFilePath: string, branch: string): Promise<void> {
   await vscode.window.withProgress({
-    location: vscode.ProgressLocation.Notification,
+    location: vscode.ProgressLocation.SourceControl,
     title: 'Pushing changes...',
     cancellable: false
   }, async (ProgressLocation, token) => {

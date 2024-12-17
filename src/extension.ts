@@ -85,8 +85,6 @@ export function activate(context: vscode.ExtensionContext) {
 					const commitDate = new Date().toISOString();
 					const logMessage = `Commit: ${headCommit}\nMessage: ${message}\nDate: ${commitDate}\nBranch: ${branch}\nRepository Path: ${repoPath}\n\n`;
 
-					logInfo(logMessage);
-
 					// Ensure the directory exists
 					const trackingFilePath = path.join(logFilePath, logFile);
 					try {
