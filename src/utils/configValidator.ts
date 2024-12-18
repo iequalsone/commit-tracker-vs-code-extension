@@ -26,14 +26,17 @@ export async function validateConfig(): Promise<boolean> {
   try {
     fs.accessSync(logFilePath, fs.constants.W_OK);
   } catch (err) {
-    vscode.window.showErrorMessage('Log file path is not writable. Please configure a writable path.');
+    const selection = await vscode.window.showErrorMessage('Log file path is not writable. Please configure a writable path.', 'Select Log Folder');
+    if (selection === 'Select Log Folder') {
+      await selectLogFolder();
+    }
     return false;
   }
 
   return true;
 }
 
-async function selectLogFolder(): Promise<void> {
+export async function selectLogFolder(): Promise<void> {
   const config = vscode.workspace.getConfiguration('commitTracker');
   const folderUri = await vscode.window.showOpenDialog({
     canSelectFolders: true,

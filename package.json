@@ -11,17 +11,11 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:commit-tracker.setLogFilePath",
     "onGitChange"
   ],
   "main": "./out/extension.js",
   "contributes": {
-    "commands": [
-      {
-        "command": "commit-tracker.setLogFilePath",
-        "title": "Set Log File Path"
-      }
-    ],
+    "commands": [],
     "configuration": {
       "type": "object",
       "properties": {

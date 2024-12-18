@@ -7,8 +7,13 @@ import { debounce } from './utils/debounce';
 import { DisposableManager } from './utils/DisposableManager';
 import { validateConfig } from './utils/configValidator.js';
 
-export function activate(context: vscode.ExtensionContext) {
-	if (!validateConfig()) {
+let logFilePath: string;
+let logFile: string;
+let excludedBranches: string[];
+
+export async function activate(context: vscode.ExtensionContext) {
+	const isValidConfig = await validateConfig();
+	if (!isValidConfig) {
 		return;
 	}
 
@@ -16,9 +21,9 @@ export function activate(context: vscode.ExtensionContext) {
 	const disposableManager = DisposableManager.getInstance();
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
-	const logFilePath = config.get<string>('logFilePath')!;
-	const logFile = config.get<string>('logFile')!;
-	const excludedBranches = config.get<string[]>('excludedBranches')!;
+	logFilePath = config.get<string>('logFilePath')!;
+	logFile = config.get<string>('logFile')!;
+	excludedBranches = config.get<string[]>('excludedBranches')!;
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
 	const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
@@ -105,6 +110,18 @@ export function activate(context: vscode.ExtensionContext) {
 			disposableManager.register(disposableListener);
 		});
 	}
+
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration(async (e) => {
+			if (e.affectsConfiguration('commitTracker')) {
+				const config = vscode.workspace.getConfiguration('commitTracker');
+				logFilePath = config.get<string>('logFilePath')!;
+				logFile = config.get<string>('logFile')!;
+				excludedBranches = config.get<string[]>('excludedBranches')!;
+				logInfo(`Configuration updated: ${logFilePath}, ${logFile}, ${excludedBranches}`);
+			}
+		})
+	);
 }
 
 export function deactivate(): void {
