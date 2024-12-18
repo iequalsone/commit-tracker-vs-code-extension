@@ -5,49 +5,21 @@ import { ensureDirectoryExists, appendToFile, validatePath } from './services/fi
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
 import { DisposableManager } from './utils/DisposableManager';
+import { validateConfig } from './utils/configValidator.js';
 
 export function activate(context: vscode.ExtensionContext) {
+	if (!validateConfig()) {
+		return;
+	}
+
+	logInfo('Commit Tracker extension activated');
 	const disposableManager = DisposableManager.getInstance();
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
-	const logFilePath = config.get<string>('logFilePath');
+	const logFilePath = config.get<string>('logFilePath')!;
 	const logFile = config.get<string>('logFile')!;
 	const excludedBranches = config.get<string[]>('excludedBranches')!;
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
-
-	const disposable = vscode.commands.registerCommand('commit-tracker.setLogFilePath', async () => {
-		try {
-			const uri = await vscode.window.showOpenDialog({
-				canSelectFiles: false,
-				canSelectFolders: true,
-				canSelectMany: false,
-				openLabel: 'Select Log File Folder'
-			});
-
-			if (uri && uri[0]) {
-				const selectedPath = uri[0].fsPath;
-				if (!validatePath(selectedPath)) {
-					throw new Error('Invalid log file path.');
-				}
-				await config.update('logFilePath', selectedPath, vscode.ConfigurationTarget.Global);
-				logInfo(`Log file path set to: ${selectedPath}`);
-			}
-		} catch (err) {
-			logError('Failed to set log file path:', err);
-		}
-	});
-
-	context.subscriptions.push(disposable);
-	disposableManager.register(disposable);
-
-	if (!logFilePath) {
-		vscode.window.showWarningMessage('Please configure the log file path for Commit Tracker.', 'Open Settings').then(selection => {
-			if (selection === 'Open Settings') {
-				vscode.commands.executeCommand('commit-tracker.setLogFilePath');
-			}
-		});
-		return;
-	}
 
 	const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
 	if (!gitExtension) {
@@ -62,7 +34,11 @@ export function activate(context: vscode.ExtensionContext) {
 	}
 
 	if (api) {
-		api.repositories.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
+		logInfo('Git API available');
+		const activeRepos = api.repositories.filter((repo: any) => repo.state.HEAD);
+		activeRepos.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
+			logInfo('Processing repository:');
+			console.log(repo);
 			const debouncedOnDidChange = debounce(async () => {
 				const headCommit = repo.state.HEAD?.commit;
 				const branch = repo.state.HEAD?.name;
@@ -132,6 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate(): void {
-	// Clean up all registered disposables
-	DisposableManager.getInstance().dispose();
+	const disposableManager = DisposableManager.getInstance();
+	disposableManager.dispose();
+	vscode.window.showInformationMessage('Commit Tracker deactivated.');
 }
