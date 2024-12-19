@@ -5,7 +5,7 @@ import { ensureDirectoryExists, appendToFile, validatePath } from './services/fi
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
 import { DisposableManager } from './utils/DisposableManager';
-import { validateConfig } from './utils/configValidator.js';
+import { selectLogFolder, validateConfig } from './utils/configValidator.js';
 
 let logFilePath: string;
 let logFile: string;
@@ -68,6 +68,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 					// Ensure the directory exists
 					const trackingFilePath = path.join(logFilePath, logFile);
+					console.log('logFilePath:', logFilePath);
 					try {
 						if (!validatePath(trackingFilePath)) {
 							throw new Error('Invalid tracking file path.');
@@ -114,13 +115,22 @@ export async function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.workspace.onDidChangeConfiguration(async (e) => {
 			if (e.affectsConfiguration('commitTracker')) {
-				const config = vscode.workspace.getConfiguration('commitTracker');
-				logFilePath = config.get<string>('logFilePath')!;
-				logFile = config.get<string>('logFile')!;
-				excludedBranches = config.get<string[]>('excludedBranches')!;
-				logInfo(`Configuration updated: ${logFilePath}, ${logFile}, ${excludedBranches}`);
+				const isValid = await validateConfig();
+				if (isValid) {
+					const updatedConfig = vscode.workspace.getConfiguration('commitTracker');
+					logFilePath = updatedConfig.get<string>('logFilePath')!;
+					logFile = updatedConfig.get<string>('logFile')!;
+					excludedBranches = updatedConfig.get<string[]>('excludedBranches')!;
+					logInfo('Configuration updated');
+				} else {
+					logError('Configuration validation failed after changes.');
+				}
 			}
 		})
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand('commit-tracker.selectLogFolder', selectLogFolder)
 	);
 }
 

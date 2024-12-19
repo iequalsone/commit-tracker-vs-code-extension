@@ -14,6 +14,7 @@ export async function validateConfig(): Promise<boolean> {
     );
     if (selection === 'Select Log Folder') {
       await selectLogFolder();
+      return await validateConfig();
     }
     return false;
   }
@@ -29,6 +30,7 @@ export async function validateConfig(): Promise<boolean> {
     const selection = await vscode.window.showErrorMessage('Log file path is not writable. Please configure a writable path.', 'Select Log Folder');
     if (selection === 'Select Log Folder') {
       await selectLogFolder();
+      return await validateConfig();
     }
     return false;
   }

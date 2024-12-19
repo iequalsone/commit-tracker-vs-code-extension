@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import path from 'path';
 import { ensureDirectoryExists } from '../services/fileService';
+import { selectLogFolder } from './configValidator';
 
 export function logInfo(message: string): void {
   const config = vscode.workspace.getConfiguration('commitTracker');
@@ -12,9 +13,14 @@ export function logInfo(message: string): void {
   }
 }
 
-export function logError(message: string, error?: any): void {
+export async function logError(message: string, error?: any): Promise<void> {
   console.error(message, error);
-  vscode.window.showErrorMessage(message);
+  const action = message.includes('Failed to ensure directory exists:') ? '' : 'View Details';
+  const selection = await vscode.window.showErrorMessage(message, action);
+
+  if (selection === 'View Details') {
+    await selectLogFolder();
+  }
 
   const config = vscode.workspace.getConfiguration('commitTracker');
   const logFilePath = config.get<string>('logFilePath');
