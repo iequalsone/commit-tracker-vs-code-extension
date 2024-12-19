@@ -75,6 +75,9 @@
   },
   "dependencies": {
     "shell-escape": "^0.2.0",
+    "simple-git": "^3.0.0"
+  },
+  "devDependencies": {
     "@types/node": "20.x",
     "@types/shell-escape": "^0.2.3",
     "@types/vscode": "^1.96.0",
