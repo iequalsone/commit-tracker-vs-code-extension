@@ -24,7 +24,7 @@ export async function getCommitMessage(repoPath: string, commitId: string): Prom
   });
 }
 
-export async function pushChanges(repoPath: string, trackingFilePath: string, branch: string): Promise<void> {
+export async function pushChanges(repoPath: string, trackingFilePath: string): Promise<void> {
   await vscode.window.withProgress({
     location: vscode.ProgressLocation.SourceControl,
     title: 'Pushing changes...',
@@ -40,6 +40,6 @@ export async function pushChanges(repoPath: string, trackingFilePath: string, br
 
     await git.add(trackingFilePath);
     await git.commit('Update commit log');
-    await git.push('origin', branch);
+    await git.push('origin', 'main');
   });
 }

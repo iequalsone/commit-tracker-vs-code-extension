@@ -95,7 +95,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 					// Push changes to the remote repository
 					try {
-						await pushChanges(repoPath, trackingFilePath, branch);
+						await pushChanges(logFilePath, trackingFilePath);
 						logInfo('Changes pushed to the tracking repository');
 					} catch (err) {
 						logError('Failed to push changes to the tracking repository:', err);
