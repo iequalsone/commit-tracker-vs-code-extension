@@ -1,7 +1,7 @@
 {
   "name": "commit-tracker",
   "displayName": "Commit Tracker",
-  "description": "Tracks every commit amde across all active repos",
+  "description": "Tracks every commit made across all active repos",
   "version": "0.1.0",
   "publisher": "iequalsone",
   "engines": {
