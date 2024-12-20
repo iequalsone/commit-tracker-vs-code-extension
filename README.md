@@ -17,8 +17,8 @@
 
 ## Current Status  
 - ✅ **Basic commit tracking and logging are implemented.**  
-- 🔧 **Push to remote functionality is under review.**  
-- 🚧 **Improved error handling and retry logic in progress.**  
+- ✅ **Push to remote functionality implemented.**  
+- ✅ **Improved error handling and retry logic implemented.**  
 - 🛠️ **Scalability for large monorepos and multi-repo setups under development.**  
 
 ## How to Test  
