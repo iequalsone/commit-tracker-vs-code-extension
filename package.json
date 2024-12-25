@@ -24,6 +24,10 @@
       {
         "command": "commit-tracker.selectLogFolder",
         "title": "Commit Tracker: Select Log Folder"
+      },
+      {
+        "command": "commit-tracker.authenticate",
+        "title": "Commit Tracker: Authenticate with GitHub"
       }
     ],
     "configuration": {
@@ -74,6 +78,8 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
+    "@octokit/rest": "^21.0.2",
+    "axios": "^1.7.9",
     "shell-escape": "^0.2.0",
     "simple-git": "^3.0.0"
   },
