@@ -6,6 +6,7 @@ import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
 import { DisposableManager } from './utils/DisposableManager';
 import { selectLogFolder, validateConfig } from './utils/configValidator.js';
+import { authenticate } from './utils/authenticate';
 
 let logFilePath: string;
 let logFile: string;
@@ -19,6 +20,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	logInfo('Commit Tracker extension activated');
 	const disposableManager = DisposableManager.getInstance();
+
+	const authenticateCommand = vscode.commands.registerCommand('commit-tracker.authenticate', () => authenticate(context));
+	context.subscriptions.push(authenticateCommand);
 
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	logFilePath = config.get<string>('logFilePath')!;
