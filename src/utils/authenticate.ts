@@ -33,35 +33,60 @@ export async function authenticate(context: vscode.ExtensionContext) {
       verification_uri
     } = paramsObj;
 
+    if (!device_code || !user_code || !verification_uri) {
+      throw new Error('Invalid response from GitHub');
+    }
+
     const expiresInNumber = expires_in ? parseInt(expires_in, 10) : null;
     const intervalNumber = interval ? parseInt(interval, 10) : null;
 
     // Step 2: Prompt the user to authenticate
-    if (verification_uri && user_code) {
-      console.log('Device code:', device_code);
-      console.log('user_code:', user_code);
-      console.log('verification_uri:', verification_uri);
-      vscode.window.showInformationMessage(
-        `To authenticate with GitHub, please visit ${verification_uri} and enter the code: ${user_code}`
-      );
+    const openUrl = 'Open GitHub';
+    const copyCode = 'Copy Code';
+
+    const openAction = await vscode.window.showInformationMessage(
+      `To authenticate with GitHub, please visit the following URL: ${verification_uri}`,
+      openUrl
+    );
+
+    if (openAction === openUrl) {
+      try {
+        await vscode.env.openExternal(vscode.Uri.parse(verification_uri));
+      } catch (openError) {
+        console.error('Failed to open the URL:', openError);
+        vscode.window.showErrorMessage('Unable to open the verification URL. Please copy and paste it manually.');
+      }
     }
 
-    if (device_code && intervalNumber && expiresInNumber) {
-      // Step 3: Poll GitHub for access token
-      const accessToken = await pollForAccessToken(device_code, intervalNumber, expiresInNumber);
-      console.log('accessToken', accessToken)
+    const copyAction = await vscode.window.showInformationMessage(
+      `Enter the code provided: ${user_code}`,
+      copyCode
+    );
 
-      if (accessToken) {
-        const { Octokit } = await import('@octokit/rest');
-        const octokit = new Octokit({ auth: accessToken });
-
-        // Store the token securely using SecretStorage API
-        await context.secrets.store('githubAccessToken', accessToken);
-
-        vscode.window.showInformationMessage('GitHub Authentication Successful!');
-      } else {
-        vscode.window.showErrorMessage('GitHub Authentication Failed or Timed Out.');
+    if (copyAction === copyCode) {
+      try {
+        await vscode.env.clipboard.writeText(user_code);
+        vscode.window.showInformationMessage('User code copied to clipboard.');
+      } catch (clipboardError) {
+        console.error('Failed to copy code:', clipboardError);
+        vscode.window.showErrorMessage('Unable to copy the user code to clipboard. Please enter it manually.');
       }
+    }
+
+    // Step 3: Poll GitHub for access token
+    const accessToken = await pollForAccessToken(device_code, intervalNumber!, expiresInNumber!);
+
+    if (accessToken) {
+      const { Octokit } = await import('@octokit/rest');
+      const octokit = new Octokit({ auth: accessToken });
+      console.log('accessToken', accessToken);
+
+      // Store the token securely using SecretStorage API
+      await context.secrets.store('githubAccessToken', accessToken);
+
+      vscode.window.showInformationMessage('GitHub Authentication Successful!');
+    } else {
+      vscode.window.showErrorMessage('GitHub Authentication Failed or Timed Out.');
     }
   } catch (error) {
     console.error('Authentication error:', error);
