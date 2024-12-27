@@ -18,7 +18,6 @@ export async function activate(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	logInfo('Commit Tracker extension activated');
 	const disposableManager = DisposableManager.getInstance();
 
 	const authenticateCommand = vscode.commands.registerCommand('commit-tracker.authenticate', () => authenticate(context));
@@ -43,7 +42,6 @@ export async function activate(context: vscode.ExtensionContext) {
 	}
 
 	if (api) {
-		logInfo('Git API available');
 		const activeRepos = api.repositories.filter((repo: any) => repo.state.HEAD);
 		activeRepos.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
 			logInfo('Processing repository:');
