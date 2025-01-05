@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as fs from 'fs';
 import { getCommitMessage, pullChanges, pushChanges } from './services/gitService';
 import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
@@ -62,8 +63,16 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				if (headCommit === lastProcessedCommit) {
-					return;
+				try {
+					const logPath = path.join(logFilePath, logFile);
+					if (fs.existsSync(logPath)) {
+						const logContent = fs.readFileSync(logPath, 'utf8');
+						if (logContent.includes(headCommit)) {
+							return;
+						}
+					}
+				} catch (error) {
+					logError(`Error checking commits.log: ${error}`);
 				}
 
 				lastProcessedCommit = headCommit;
