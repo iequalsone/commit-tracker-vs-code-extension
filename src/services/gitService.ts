@@ -43,3 +43,14 @@ export async function pushChanges(repoPath: string, trackingFilePath: string): P
     await git.push('origin', 'main');
   });
 }
+
+export async function pullChanges(repoPath: string): Promise<void> {
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.SourceControl,
+    title: 'Pulling latest changes...',
+    cancellable: false
+  }, async () => {
+    const git: SimpleGit = simpleGit(repoPath);
+    await git.pull('origin', 'main');
+  });
+}

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { getCommitMessage, pushChanges } from './services/gitService';
+import { getCommitMessage, pullChanges, pushChanges } from './services/gitService';
 import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
@@ -23,6 +23,14 @@ export async function activate(context: vscode.ExtensionContext) {
 	const config = vscode.workspace.getConfiguration('commitTracker');
 	logFilePath = config.get<string>('logFilePath')!;
 	logFile = config.get<string>('logFile')!;
+
+	try {
+		await pullChanges(logFilePath);
+		logInfo('Successfully pulled latest changes from tracking repository');
+	} catch (err) {
+		logError('Failed to pull changes from tracking repository:', err);
+	}
+
 	excludedBranches = config.get<string[]>('excludedBranches')!;
 	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
 
