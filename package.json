@@ -2,7 +2,7 @@
   "name": "commit-tracker",
   "displayName": "Commit Tracker",
   "description": "Tracks every commit made across all active repos",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "iequalsone",
   "engines": {
     "vscode": "^1.96.0"
