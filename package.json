@@ -29,6 +29,14 @@
     "configuration": {
       "type": "object",
       "properties": {
+        "commitTracker.allowedAuthors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of GitHub authors whose commits should be tracked. Empty array means track all authors."
+        },
         "commitTracker.enableNotifications": {
           "type": "boolean",
           "default": false,

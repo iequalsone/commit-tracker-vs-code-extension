@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getCommitMessage, pullChanges, pushChanges } from './services/gitService';
+import { getCommitAuthorDetails, getCommitMessage, getRepoNameFromRemote, pullChanges, pushChanges } from './services/gitService';
 import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
@@ -52,7 +52,6 @@ export async function activate(context: vscode.ExtensionContext) {
 		const activeRepos = api.repositories.filter((repo: any) => repo.state.HEAD);
 		activeRepos.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
 			logInfo('Processing repository:');
-			console.log(repo);
 			const debouncedOnDidChange = debounce(async () => {
 				const headCommit = repo.state.HEAD?.commit;
 				const branch = repo.state.HEAD?.name;
@@ -61,6 +60,22 @@ export async function activate(context: vscode.ExtensionContext) {
 				if (!headCommit) {
 					logError('No HEAD commit found. Please ensure the repository is in a valid state.');
 					return;
+				}
+
+				const config = vscode.workspace.getConfiguration('commitTracker');
+				const allowedAuthors = config.get<string[]>('allowedAuthors') || [];
+
+				if (allowedAuthors.length > 0) {
+					try {
+						const author = await getCommitAuthorDetails(repoPath, headCommit);
+						if (!allowedAuthors.includes(author)) {
+							logInfo(`Skipping commit from non-allowed author: ${author}`);
+							return;
+						}
+					} catch (error) {
+						logError(`Error checking commit author: ${error}`);
+						return;
+					}
 				}
 
 				try {
@@ -81,11 +96,18 @@ export async function activate(context: vscode.ExtensionContext) {
 				try {
 					const message = await getCommitMessage(repoPath, headCommit);
 					const commitDate = new Date().toISOString();
-					const logMessage = `Commit: ${headCommit}\nMessage: ${message}\nDate: ${commitDate}\nBranch: ${branch}\nRepository Path: ${repoPath}\n\n`;
+					const author = await getCommitAuthorDetails(repoPath, headCommit);
+					const repoName = await getRepoNameFromRemote(repoPath);
 
-					// Ensure the directory exists
+					const logMessage = `Commit: ${headCommit}
+Message: ${message}
+Author: ${author}
+Date: ${commitDate}
+Branch: ${branch}
+Repository: ${repoName}
+Repository Path: ${repoPath}\n\n`;
+
 					const trackingFilePath = path.join(logFilePath, logFile);
-					console.log('logFilePath:', logFilePath);
 					try {
 						if (!validatePath(trackingFilePath)) {
 							throw new Error('Invalid tracking file path.');
@@ -101,7 +123,6 @@ export async function activate(context: vscode.ExtensionContext) {
 						return;
 					}
 
-					// Append commit details to the log file
 					try {
 						await appendToFile(trackingFilePath, logMessage);
 						logInfo('Commit details logged to commits.log');
@@ -110,7 +131,6 @@ export async function activate(context: vscode.ExtensionContext) {
 						return;
 					}
 
-					// Push changes to the remote repository
 					try {
 						await pushChanges(logFilePath, trackingFilePath);
 						logInfo('Changes pushed to the tracking repository');
@@ -120,7 +140,7 @@ export async function activate(context: vscode.ExtensionContext) {
 				} catch (err) {
 					logError('Failed to process commit:', err);
 				}
-			}, 300); // Adjust the debounce delay as needed
+			}, 300);
 
 			const listener = repo.state.onDidChange(debouncedOnDidChange);
 			const disposableListener = { dispose: () => listener };

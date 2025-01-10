@@ -7,7 +7,6 @@ import { selectLogFolder } from './configValidator';
 export function logInfo(message: string): void {
   const config = vscode.workspace.getConfiguration('commitTracker');
   const showNotifications = config.get<boolean>('enableNotifications');
-  console.log(message);
   if (showNotifications) {
     vscode.window.showInformationMessage(message);
   }

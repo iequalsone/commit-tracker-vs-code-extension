@@ -3,6 +3,41 @@ import { simpleGit, SimpleGit } from 'simple-git';
 import shellEscape from 'shell-escape';
 import * as vscode from 'vscode';
 
+export async function getRepoNameFromRemote(repoPath: string): Promise<string> {
+  const git: SimpleGit = simpleGit(repoPath);
+  const remotes = await git.getRemotes(true);
+  const origin = remotes.find(remote => remote.name === 'origin');
+
+  if (!origin) {
+    throw new Error('No origin remote found');
+  }
+
+  const url = origin.refs.fetch;
+
+  // Handle HTTPS URLs: https://github.com/owner/repo.git
+  // Handle SSH URLs: git@github.com:owner/repo.git
+  const match = url.match(/(?:\/|:)([^\/]+\/[^\/]+?)(?:\.git)?$/);
+
+  if (!match) {
+    throw new Error('Could not parse repository name from remote URL');
+  }
+
+  const [owner, repo] = match[1].split('/');
+  return `${owner}/${repo}`;
+}
+
+export async function getCommitAuthorDetails(repoPath: string, commitId: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    exec(`git show -s --format="%an <%ae>" ${commitId}`, { cwd: repoPath }, (err, stdout) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(stdout.trim());
+      }
+    });
+  });
+}
+
 export async function getCommitMessage(repoPath: string, commitId: string): Promise<string> {
   return vscode.window.withProgress({
     location: vscode.ProgressLocation.SourceControl,
