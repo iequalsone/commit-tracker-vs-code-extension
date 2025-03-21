@@ -6,7 +6,7 @@ import { ensureDirectoryExists, appendToFile, validatePath } from './services/fi
 import { logInfo, logError } from './utils/logger';
 import { debounce } from './utils/debounce';
 import { DisposableManager } from './utils/DisposableManager';
-import { selectLogFolder, validateConfig } from './utils/configValidator.js';
+import { selectLogFolder, validateConfig } from './utils/configValidator';
 
 let logFilePath: string;
 let logFile: string;
