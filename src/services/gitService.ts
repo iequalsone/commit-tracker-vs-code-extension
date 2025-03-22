@@ -334,23 +334,135 @@ export async function pushChanges(
       logInfo(`Error getting remote information: ${error}`);
       logInfo("Changes committed locally only");
       }
-    });
-  });
+  } catch (error) {
+    logError(`Overall error in push operation: ${error}`);
+    // This error is logged but not rethrown
+  }
 }
 
-export async function getCommitMessage(repoPath: string, commitId: string): Promise<string> {
-  return vscode.window.withProgress({
-    location: vscode.ProgressLocation.SourceControl,
-    title: 'Fetching commit message...',
-    cancellable: false,
+/**
+ * Pushes changes to the tracking repository using spawn (which can handle interactive prompts better)
+ * @param logFilePath Path to the log file directory
+ * @param filePath Path to the file that was changed
+ * @returns A promise that resolves when the push is complete
+ */
+export async function pushChangesWithSpawn(
+  logFilePath: string,
+  filePath: string
+): Promise<void> {
+  const { spawn } = require("child_process");
 
-  }, async (progress, token) => {
-    return new Promise((resolve, reject) => {
-      const sanitizedRepoPath = shellEscape([repoPath]);
-      const sanitizedCommitId = shellEscape([commitId]);
-      exec(`git show -s --format=%B ${sanitizedCommitId}`, { cwd: sanitizedRepoPath }, (err, stdout) => {
-        if (err) {
-          reject(err);
+  try {
+    logInfo(
+      `Pushing changes to tracking repository at: ${logFilePath} (using spawn)`
+    );
+
+    // Check if this is a git repository
+    if (!fs.existsSync(path.join(logFilePath, ".git"))) {
+      logInfo(`${logFilePath} is not a git repository, skipping push`);
+      return;
+    }
+
+    // Stage the file
+    await new Promise<void>((resolve, reject) => {
+      logInfo(`Adding file: ${filePath}`);
+
+      const addProcess = spawn("git", ["-C", logFilePath, "add", filePath], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      addProcess.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      addProcess.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      addProcess.on("close", (code: number) => {
+        if (code === 0) {
+          logInfo("File added successfully");
+          resolve();
+        } else {
+          logError(`Failed to add file: ${stderr}`);
+          reject(new Error(`git add failed with code ${code}: ${stderr}`));
+        }
+      });
+    });
+
+    // Commit the changes
+    await new Promise<void>((resolve, reject) => {
+      const timestamp = new Date().toISOString();
+      logInfo("Committing changes");
+
+      const commitProcess = spawn(
+        "git",
+        ["-C", logFilePath, "commit", "-m", `Update commit log - ${timestamp}`],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        }
+      );
+
+      let stdout = "";
+      let stderr = "";
+
+      commitProcess.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+
+      commitProcess.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      commitProcess.on("close", (code: number) => {
+        if (code === 0) {
+          logInfo("Changes committed successfully");
+          resolve();
+        } else {
+          // Check if there were no changes to commit
+          if (
+            stderr.includes("nothing to commit") ||
+            stderr.includes("no changes added to commit")
+          ) {
+            logInfo("No changes to commit");
+            resolve();
+            return;
+          }
+
+          logError(`Failed to commit changes: ${stderr}`);
+          reject(new Error(`git commit failed with code ${code}: ${stderr}`));
+        }
+      });
+    });
+
+    // Push the changes
+    await new Promise<void>((resolve, reject) => {
+      logInfo("Pushing changes");
+
+      const pushProcess = spawn("git", ["-C", logFilePath, "push"], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+
+      pushProcess.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+        logInfo(`Push output: ${data.toString().trim()}`);
+      });
+
+      pushProcess.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+        logInfo(`Push stderr: ${data.toString().trim()}`);
+      });
+
+      pushProcess.on("close", (code: number) => {
+        if (code === 0) {
+          logInfo("Changes pushed successfully");
+          resolve();
         } else {
           resolve(stdout.trim());
         }
