@@ -464,7 +464,48 @@ export async function pushChangesWithSpawn(
           logInfo("Changes pushed successfully");
           resolve();
         } else {
-          resolve(stdout.trim());
+          // Try one more time with -u option
+          logInfo(`Standard push failed, trying with -u option`);
+
+          const pushWithUProcess = spawn(
+            "git",
+            [
+              "-C",
+              logFilePath,
+              "push",
+              "-u",
+              "origin",
+              "main", // assuming main branch, you might want to make this configurable
+            ],
+            {
+              stdio: ["ignore", "pipe", "pipe"],
+            }
+          );
+
+          let uStdout = "";
+          let uStderr = "";
+
+          pushWithUProcess.stdout.on("data", (data: Buffer) => {
+            uStdout += data.toString();
+            logInfo(`Push -u output: ${data.toString().trim()}`);
+          });
+
+          pushWithUProcess.stderr.on("data", (data: Buffer) => {
+            uStderr += data.toString();
+            logInfo(`Push -u stderr: ${data.toString().trim()}`);
+          });
+
+          pushWithUProcess.on("close", (uCode: number) => {
+            if (uCode === 0) {
+              logInfo("Changes pushed successfully with -u option");
+              resolve();
+            } else {
+              logError(`Failed to push changes: ${uStderr}`);
+              reject(
+                new Error(`git push failed with code ${uCode}: ${uStderr}`)
+              );
+            }
+          });
         }
       });
     });
