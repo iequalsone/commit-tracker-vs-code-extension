@@ -183,28 +183,156 @@ export async function getRepoNameFromRemote(repoPath: string): Promise<string> {
     // Fall back to using the directory name
     return path.basename(repoPath);
   }
-
-  const url = origin.refs.fetch;
-
-  // Handle HTTPS URLs: https://github.com/owner/repo.git
-  // Handle SSH URLs: git@github.com:owner/repo.git
-  const match = url.match(/(?:\/|:)([^\/]+\/[^\/]+?)(?:\.git)?$/);
-
-  if (!match) {
-    throw new Error('Could not parse repository name from remote URL');
-  }
-
-  const [owner, repo] = match[1].split('/');
-  return `${owner}/${repo}`;
 }
 
-export async function getCommitAuthorDetails(repoPath: string, commitId: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    exec(`git show -s --format="%an <%ae>" ${commitId}`, { cwd: repoPath }, (err, stdout) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(stdout.trim());
+/**
+ * Pulls changes from the tracking repository
+ * @param logFilePath Path to the log file directory
+ * @returns A promise that resolves when the pull is complete
+ */
+export async function pullChanges(logFilePath: string): Promise<void> {
+  try {
+    logInfo(`Pulling changes from tracking repository at: ${logFilePath}`);
+
+    // Check if this is a git repository
+    if (!fs.existsSync(path.join(logFilePath, ".git"))) {
+      logInfo(`${logFilePath} is not a git repository, skipping pull`);
+      return;
+    }
+
+    // First, check if there's actually an origin remote
+    try {
+      const remotes = await executeGitCommand(logFilePath, "remote");
+      if (!remotes.includes("origin")) {
+        logInfo("No origin remote configured, skipping pull");
+        return;
+      }
+    } catch (error) {
+      logInfo(`Error checking remotes: ${error}, continuing without pull`);
+      return;
+    }
+
+    // Check for tracking branch without failing if there isn't one
+    try {
+      const currentBranch = await executeGitCommand(
+        logFilePath,
+        "rev-parse --abbrev-ref HEAD"
+      );
+      const trackingBranch = await executeGitCommand(
+        logFilePath,
+        `rev-parse --abbrev-ref ${currentBranch}@{upstream}`
+      );
+
+      if (!trackingBranch) {
+        logInfo(`No upstream branch set for ${currentBranch}, skipping pull`);
+        return;
+      }
+
+      logInfo(
+        `Found tracking branch: ${trackingBranch} for current branch: ${currentBranch}`
+      );
+      await executeGitCommand(logFilePath, "pull --rebase");
+      logInfo("Successfully pulled changes from tracking repository");
+    } catch (error) {
+      // This could happen if there's no upstream branch set
+      logInfo(`Error during pull: ${error}, continuing without pull`);
+    }
+  } catch (error) {
+    // Log error but don't throw - allow the extension to continue
+    logError(`Failed to pull changes: ${error}`);
+  }
+}
+
+/**
+ * Pushes changes to the tracking repository
+ * @param logFilePath Path to the log file directory
+ * @param filePath Path to the file that was changed
+ * @returns A promise that resolves when the push is complete
+ */
+export async function pushChanges(
+  logFilePath: string,
+  filePath: string
+): Promise<void> {
+  try {
+    logInfo(`Pushing changes to tracking repository at: ${logFilePath}`);
+
+    // Check if this is a git repository
+    if (!fs.existsSync(path.join(logFilePath, ".git"))) {
+      logInfo(`${logFilePath} is not a git repository, skipping push`);
+      return;
+    }
+
+    // Stage the file
+    try {
+      await executeGitCommand(logFilePath, `add "${filePath}"`);
+      logInfo(`Added file: ${filePath}`);
+    } catch (error) {
+      logError(`Failed to add file: ${error}`);
+      return;
+    }
+
+    // Check if there are changes to commit
+    const status = await executeGitCommand(logFilePath, "status --porcelain");
+    if (!status) {
+      logInfo("No changes to commit");
+      return;
+    }
+
+    // Commit the changes
+    const timestamp = new Date().toISOString();
+    await executeGitCommand(
+      logFilePath,
+      `commit -m "Update commit log - ${timestamp}"`
+    );
+    logInfo("Committed changes successfully");
+
+    // Check if there's a remote origin
+    try {
+      const remotes = await executeGitCommand(logFilePath, "remote");
+      if (!remotes.includes("origin")) {
+        logInfo("No origin remote configured, skipping push");
+        return;
+      }
+
+      // Get current branch
+      const currentBranch = await executeGitCommand(
+        logFilePath,
+        "rev-parse --abbrev-ref HEAD"
+      );
+
+      // Try direct push first
+      try {
+        await executeGitCommand(logFilePath, "push");
+        logInfo("Successfully pushed changes to tracking repository");
+        return;
+      } catch (error) {
+        logInfo(`Standard push failed, trying with -u: ${error}`);
+
+        try {
+          // Try push with upstream tracking
+          await executeGitCommand(
+            logFilePath,
+            `push -u origin ${currentBranch}`
+          );
+          logInfo("Successfully pushed changes with -u option");
+        } catch (pushError) {
+          // If all else fails, try force push as a last resort
+          logInfo(
+            `Push with -u failed: ${pushError}, trying with force option`
+          );
+
+          try {
+            await executeGitCommand(logFilePath, `push --force-with-lease`);
+            logInfo("Successfully force pushed changes to tracking repository");
+          } catch (forceError) {
+            logError(`Force push failed: ${forceError}`);
+            logInfo("Changes committed locally only");
+          }
+        }
+      }
+    } catch (error) {
+      logInfo(`Error getting remote information: ${error}`);
+      logInfo("Changes committed locally only");
       }
     });
   });
