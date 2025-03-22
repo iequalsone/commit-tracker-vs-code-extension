@@ -24,6 +24,34 @@
       {
         "command": "commit-tracker.selectLogFolder",
         "title": "Commit Tracker: Select Log Folder"
+      },
+      {
+        "command": "commit-tracker.logCurrentCommit",
+        "title": "Commit Tracker: Log Current Commit"
+      },
+      {
+        "command": "commit-tracker.startMonitoring",
+        "title": "Commit Tracker: Start Monitoring"
+      },
+      {
+        "command": "commit-tracker.forceLogLatestCommit",
+        "title": "Commit Tracker: Force Log Latest Commit"
+      },
+      {
+        "command": "commit-tracker.showDebugInfo",
+        "title": "Commit Tracker: Show Debug Information"
+      },
+      {
+        "command": "commit-tracker.pushTrackerChanges",
+        "title": "Commit Tracker: Push Log Changes"
+      },
+      {
+        "command": "commit-tracker.pushTrackerChanges",
+        "title": "Commit Tracker: Push Log Changes"
+      },
+      {
+        "command": "commit-tracker.checkUnpushedStatus",
+        "title": "Commit Tracker: Check Unpushed Status"
       }
     ],
     "configuration": {
