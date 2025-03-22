@@ -509,18 +509,171 @@ export async function pushChangesWithSpawn(
         }
       });
     });
-  });
+
+    logInfo("Push operation completed successfully");
+  } catch (error) {
+    logError(`Overall error in push operation: ${error}`);
+    throw error;
+  }
 }
 
-export async function pushChanges(repoPath: string, trackingFilePath: string): Promise<void> {
-  await vscode.window.withProgress({
-    location: vscode.ProgressLocation.SourceControl,
-    title: 'Pushing changes...',
-    cancellable: false
-  }, async (ProgressLocation, token) => {
-    const git: SimpleGit = simpleGit(repoPath);
-    const remotes = await git.getRemotes(true);
-    const hasOrigin = remotes.some(remote => remote.name === 'origin');
+/**
+ * Pushes changes to the tracking repository by running a shell script in a VS Code terminal
+ * @param logFilePath Path to the log file directory
+ * @param filePath Path to the file that was changed
+ * @returns A promise that resolves when the push operation has been started
+ */
+export async function pushChangesWithShellScript(
+  logFilePath: string,
+  filePath: string
+): Promise<void> {
+  try {
+    logInfo(`Pushing changes to tracking repository using VS Code terminal`);
+
+    // Create a temporary shell script with detailed logging
+    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+
+    // Write a more streamlined script for terminal use that will self-close
+    const scriptContent = `#!/bin/bash
+# Commit-tracker push script
+echo "=== Commit Tracker Automatic Push ==="
+echo "Repository: ${logFilePath}"
+
+# Change to the repository directory
+cd "${logFilePath}"
+
+# Stage the file
+echo "Adding file: ${filePath}"
+git add "${filePath}"
+
+# Commit changes if needed
+if git status --porcelain | grep -q .; then
+  echo "Changes detected, committing..."
+  git commit -m "Update commit log - $(date -Iseconds)"
+  echo "Commit successful"
+else
+  echo "No changes to commit"
+  sleep 2 # Give user time to see the message
+  exit 0
+fi
+
+# Check if remote exists
+if git remote | grep -q origin; then
+  echo "Remote 'origin' exists"
+  
+  # Get current branch
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  echo "Current branch: $CURRENT_BRANCH"
+  
+  # Push changes
+  echo "Pushing changes to origin/$CURRENT_BRANCH..."
+  git push
+  
+  # Check if push succeeded
+  if [ $? -eq 0 ]; then
+    echo "Push successful!"
+  else
+    echo "Push failed, trying with upstream tracking..."
+    git push -u origin $CURRENT_BRANCH
+    
+    if [ $? -eq 0 ]; then
+      echo "Push with upstream tracking successful!"
+    else
+      echo "All push attempts failed. Changes committed locally only."
+      echo "Terminal will close in 5 seconds..."
+      sleep 5
+      exit 1
+    fi
+  fi
+else
+  echo "No remote 'origin' configured, skipping push"
+fi
+
+echo "=== Commit Tracker Push Complete ==="
+echo "Terminal will close in 3 seconds..."
+sleep 3
+`;
+
+    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+
+    logInfo(`Created temporary script at ${scriptPath}`);
+
+    // Use the VS Code API to create a terminal and run the script
+    const vscode = require("vscode");
+
+    // Create a terminal that will be automatically closed
+    const terminal = vscode.window.createTerminal({
+      name: "Commit Tracker",
+      hideFromUser: false, // Initially show to the user
+    });
+
+    terminal.show();
+
+    // Run the script and add a command to close the terminal when done
+    // The 'exit' at the end will close the terminal when the script completes
+    terminal.sendText(`bash "${scriptPath}" && exit || exit`);
+
+    // Schedule cleanup of the script file
+    setTimeout(() => {
+      try {
+        fs.unlinkSync(scriptPath);
+        logInfo(`Removed temporary script: ${scriptPath}`);
+      } catch (e) {
+        logInfo(`Failed to remove temporary script: ${e}`);
+      }
+    }, 10000);
+
+    // Return immediately; we can't wait for the terminal to finish
+    logInfo(`Push operation started in terminal (will auto-close)`);
+
+    // Schedule a status update after a reasonable time
+    setTimeout(() => {
+      try {
+        // Trigger status update to refresh unpushed status indicator
+        const vscode = require("vscode");
+        vscode.commands.executeCommand("commit-tracker.checkUnpushedStatus");
+        logInfo(`Scheduled status update after push`);
+      } catch (error) {
+        logInfo(`Failed to schedule status update: ${error}`);
+      }
+    }, 10000); // Wait a bit longer to allow push to complete
+  } catch (error) {
+    logError(`Failed to push changes with shell script: ${error}`);
+    // Don't rethrow - allow the extension to continue
+  }
+}
+
+/**
+ * Checks if there are unpushed commits in the tracking repository
+ * @param logFilePath Path to the log file directory
+ * @returns A promise that resolves to true if there are unpushed commits
+ */
+export async function hasUnpushedCommits(
+  logFilePath: string
+): Promise<boolean> {
+  try {
+    if (!fs.existsSync(path.join(logFilePath, ".git"))) {
+      return false; // Not a git repository
+    }
+
+    // Check if remote exists
+    const remotes = await executeGitCommand(logFilePath, "remote");
+    if (!remotes.includes("origin")) {
+      return false; // No origin remote
+    }
+
+    // Get current branch
+    const currentBranch = await executeGitCommand(
+      logFilePath,
+      "rev-parse --abbrev-ref HEAD"
+    );
+
+    // Check if there's a tracking branch
+    try {
+      const trackingBranch = await executeGitCommand(
+        logFilePath,
+        `rev-parse --abbrev-ref ${currentBranch}@{upstream}`
+      );
 
     if (!hasOrigin) {
       throw new Error('No origin remote configured for the repository.');
