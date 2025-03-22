@@ -333,7 +333,7 @@ export async function pushChanges(
     } catch (error) {
       logInfo(`Error getting remote information: ${error}`);
       logInfo("Changes committed locally only");
-      }
+    }
   } catch (error) {
     logError(`Overall error in push operation: ${error}`);
     // This error is logged but not rethrown
@@ -898,9 +898,9 @@ exit 0
       }
 
       logInfo(`Push operation started in background`);
-  });
+    });
   } catch (error) {
     logError(`Failed to push changes with hidden process: ${error}`);
     // Don't throw - we want to continue even if push setup fails
-}
+  }
 }
