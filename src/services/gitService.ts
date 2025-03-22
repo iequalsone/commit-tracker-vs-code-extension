@@ -1,8 +1,151 @@
-import { exec } from 'child_process';
-import { simpleGit, SimpleGit } from 'simple-git';
-import shellEscape from 'shell-escape';
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
+import * as path from "path";
+import * as fs from "fs";
+import * as os from "os";
+import { exec } from "child_process";
+import { promisify } from "util";
+import { logInfo, logError } from "../utils/logger";
 
+const execAsync = promisify(exec);
+
+/**
+ * Executes a git command in the specified repository path
+ * @param repoPath Path to the repository
+ * @param command Git command to execute
+ * @param options Optional execution options
+ * @returns The output of the command
+ */
+export async function executeGitCommand(
+  repoPath: string,
+  command: string,
+  options?: { timeout?: number }
+): Promise<string> {
+  // Set appropriate timeout based on command type
+  let timeout = options?.timeout || 10000; // Default 10 seconds
+
+  // Use longer timeout for push/pull operations
+  if (command.includes("push") || command.includes("pull")) {
+    timeout = 60000; // 60 seconds for network operations
+  }
+
+  try {
+    logInfo(
+      `Executing git command in ${repoPath}: ${command} (timeout: ${timeout}ms)`
+    );
+
+    // Check that the path exists
+    if (!fs.existsSync(repoPath)) {
+      throw new Error(`Repository path does not exist: ${repoPath}`);
+    }
+
+    // Set up custom environment variables to help with Git credential handling
+    const env = { ...process.env };
+
+    // Add GIT_TERMINAL_PROMPT=0 to prevent Git from trying to prompt for credentials
+    // which will cause the command to hang in VS Code
+    env.GIT_TERMINAL_PROMPT = "0";
+
+    // Execute the command with the specified timeout and custom environment
+    const { stdout, stderr } = await execAsync(
+      `git -C "${repoPath}" ${command}`,
+      {
+        timeout,
+        env,
+      }
+    );
+
+    if (stderr && !stderr.includes("Warning")) {
+      logInfo(`Git command produced stderr: ${stderr}`);
+    }
+
+    return stdout.trim();
+  } catch (error) {
+    if (error instanceof Error) {
+      // Add more detailed logging for timeouts
+      if (error.message.includes("timed out")) {
+        logError(
+          `Git command timed out after ${timeout}ms: ${command} in ${repoPath}`
+        );
+      }
+
+      logError(`Git command failed in ${repoPath} with command: ${command}`);
+      logError(`Error message: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Gets the commit message for a specific commit
+ * @param repoPath Path to the repository
+ * @param commitHash Commit hash to get the message for
+ * @returns The commit message
+ */
+export async function getCommitMessage(
+  repoPath: string,
+  commitHash: string
+): Promise<string> {
+  try {
+    logInfo(`Getting commit message for: ${commitHash} in ${repoPath}`);
+
+    if (!commitHash) {
+      throw new Error("Commit hash is required");
+    }
+
+    // Get the commit message using the git show command
+    const message = await executeGitCommand(
+      repoPath,
+      `show -s --format=%B ${commitHash}`
+    );
+
+    logInfo(
+      `Retrieved commit message: ${message.substring(0, 50)}${
+        message.length > 50 ? "..." : ""
+      }`
+    );
+    return message;
+  } catch (error) {
+    logError(`Failed to get commit message: ${error}`);
+    throw error;
+  }
+}
+
+/**
+ * Gets the author details for a specific commit
+ * @param repoPath Path to the repository
+ * @param commitHash Commit hash to get the author for
+ * @returns The author details in "Name <email>" format
+ */
+export async function getCommitAuthorDetails(
+  repoPath: string,
+  commitHash: string
+): Promise<string> {
+  try {
+    logInfo(`Getting author for: ${commitHash} in ${repoPath}`);
+
+    if (!commitHash) {
+      throw new Error("Commit hash is required");
+    }
+
+    // Get the author using the git show command
+    const author = await executeGitCommand(
+      repoPath,
+      `show -s --format="%an <%ae>" ${commitHash}`
+    );
+
+    logInfo(`Retrieved commit author: ${author}`);
+    return author;
+  } catch (error) {
+    logError(`Failed to get commit author: ${error}`);
+    throw error;
+  }
+}
+
+/**
+ * Gets the repository name from the remote URL
+ * @param repoPath Path to the repository
+ * @returns The repository name
+ */
 export async function getRepoNameFromRemote(repoPath: string): Promise<string> {
   const git: SimpleGit = simpleGit(repoPath);
   const remotes = await git.getRemotes(true);
