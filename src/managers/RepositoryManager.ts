@@ -50,7 +50,7 @@ export class RepositoryManager {
       await pullChanges(this.logFilePath);
       logInfo("Successfully pulled latest changes from tracking repository");
     } catch (err) {
-      logError("Failed to pull changes from tracking repository:", err);
+      logError(`Failed to pull changes from tracking repository: ${err}`);
     }
 
     const gitExtension = vscode.extensions.getExtension("vscode.git")?.exports;
