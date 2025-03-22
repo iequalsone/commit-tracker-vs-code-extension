@@ -1,36 +1,75 @@
-import * as vscode from 'vscode';
-import * as fs from 'fs';
-import path from 'path';
-import { ensureDirectoryExists } from '../services/fileService';
-import { selectLogFolder } from './configValidator';
+import * as vscode from "vscode";
 
-export function logInfo(message: string): void {
-  const config = vscode.workspace.getConfiguration('commitTracker');
-  const showNotifications = config.get<boolean>('enableNotifications');
-  if (showNotifications) {
-    vscode.window.showInformationMessage(message);
+// Create an output channel to log messages
+let outputChannel: vscode.OutputChannel | undefined;
+
+/**
+ * Initialize the logger with a new output channel
+ */
+export function initializeLogger(): void {
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel("Commit Tracker");
   }
 }
 
-export async function logError(message: string, error?: any): Promise<void> {
-  console.error(message, error);
-  const action = message.includes('Failed to ensure directory exists:') ? '' : 'View Details';
-  const selection = await vscode.window.showErrorMessage(message, action);
+/**
+ * Show the output channel
+ * @param preserveFocus Whether to preserve focus (true) or switch to the output channel (false)
+ */
+export function showOutputChannel(preserveFocus: boolean = true): void {
+  if (outputChannel) {
+    outputChannel.show(preserveFocus);
+  }
+}
 
-  if (selection === 'View Details') {
-    await selectLogFolder();
+/**
+ * Log an informational message
+ * @param message The message to log
+ */
+export function logInfo(message: string): void {
+  if (!outputChannel) {
+    initializeLogger();
   }
 
-  const config = vscode.workspace.getConfiguration('commitTracker');
-  const logFilePath = config.get<string>('logFilePath');
-  const diagnosticLogFile = config.get<string>('diagnosticLogFile') || 'diagnostic.log';
-  const diagnosticLogFilePath = logFilePath ? path.join(logFilePath, diagnosticLogFile) : '';
-  ensureDirectoryExists(diagnosticLogFilePath);
+  if (outputChannel) {
+    const timestamp = new Date().toISOString();
+    outputChannel.appendLine(`[INFO][${timestamp}] ${message}`);
+  }
+}
 
-  const errorDetails = `${new Date().toISOString()} - ${message}\n${error ? error.stack || error : ''}\n\n`;
-  fs.appendFile(diagnosticLogFilePath, errorDetails, (err) => {
-    if (err) {
-      console.error('Failed to write to diagnostic log file:', err);
+/**
+ * Log an error message
+ * @param message The error message to log
+ * @param error Optional error object
+ */
+export function logError(message: string, error?: any): void {
+  if (!outputChannel) {
+    initializeLogger();
+  }
+
+  if (outputChannel) {
+    const timestamp = new Date().toISOString();
+    outputChannel.appendLine(`[ERROR][${timestamp}] ${message}`);
+
+    if (error) {
+      if (error instanceof Error) {
+        outputChannel.appendLine(`Error details: ${error.message}`);
+        if (error.stack) {
+          outputChannel.appendLine(`Stack trace: ${error.stack}`);
+        }
+      } else {
+        outputChannel.appendLine(`Error details: ${JSON.stringify(error)}`);
+      }
     }
-  });
+  }
+}
+
+/**
+ * Dispose of the output channel
+ */
+export function disposeLogger(): void {
+  if (outputChannel) {
+    outputChannel.dispose();
+    outputChannel = undefined;
+  }
 }
