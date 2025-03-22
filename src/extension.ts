@@ -114,15 +114,119 @@ export async function activate(context: vscode.ExtensionContext) {
 					return;
 				}
 
-				const config = vscode.workspace.getConfiguration('commitTracker');
-				const allowedAuthors = config.get<string[]>('allowedAuthors') || [];
+  logInfo("Commit Tracker repository manager initialized successfully");
+  vscode.window.showInformationMessage(
+    "Commit Tracker is now monitoring commits"
+  );
 
-				if (allowedAuthors.length > 0) {
-					try {
-						const author = await getCommitAuthorDetails(repoPath, headCommit);
-						if (!allowedAuthors.includes(author)) {
-							logInfo(`Skipping commit from non-allowed author: ${author}`);
-							return;
+  // Register commands
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.selectLogFolder",
+      selectLogFolder
+    ),
+    vscode.commands.registerCommand(
+      "commit-tracker.logCurrentCommit",
+      async () => {
+        logInfo("Manual commit logging triggered");
+        showOutputChannel(false); // Show the output panel and focus on it
+        statusBarItem.text = "$(sync~spin) Processing...";
+
+        if (repositoryManager) {
+          logInfo("Manually triggering commit logging");
+          const gitExtension =
+            vscode.extensions.getExtension("vscode.git")?.exports;
+          if (gitExtension) {
+            const api = gitExtension.getAPI(1);
+            if (api && api.repositories.length > 0) {
+              const repo = api.repositories[0];
+              await repositoryManager.processCurrentRepository(repo);
+              vscode.window.showInformationMessage(
+                "Manually processed current commit"
+              );
+              statusBarItem.text = "$(git-commit) Tracking";
+            } else {
+              const errorMsg = "No Git repositories found";
+              logError(errorMsg);
+              vscode.window.showErrorMessage(errorMsg);
+              statusBarItem.text = "$(error) No Repos";
+            }
+          } else {
+            const errorMsg = "Git extension not found";
+            logError(errorMsg);
+            vscode.window.showErrorMessage(errorMsg);
+            statusBarItem.text = "$(error) Git Not Found";
+          }
+        } else {
+          const errorMsg = "Repository manager not initialized";
+          logError(errorMsg);
+          vscode.window.showErrorMessage(errorMsg);
+          statusBarItem.text = "$(error) Not Initialized";
+        }
+      }
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.startMonitoring",
+      async () => {
+        if (repositoryManager) {
+          logInfo("Manually starting commit monitoring");
+          const gitExtension =
+            vscode.extensions.getExtension("vscode.git")?.exports;
+          if (gitExtension) {
+            const api = gitExtension.getAPI(1);
+            if (api && api.repositories.length > 0) {
+              // Re-initialize repository listeners
+              await repositoryManager.initialize();
+              vscode.window.showInformationMessage("Commit monitoring started");
+            } else {
+              vscode.window.showErrorMessage("No Git repositories found");
+            }
+          }
+        }
+      }
+    )
+  );
+
+  // Add this command to your activate function
+  context.subscriptions.push(
+    // In your "commit-tracker.forceLogLatestCommit" command handler:
+    vscode.commands.registerCommand(
+      "commit-tracker.forceLogLatestCommit",
+      async () => {
+        logInfo("Force logging latest commit");
+        showOutputChannel(false); // Show the output panel and focus
+        statusBarItem.text = "$(sync~spin) Force Processing...";
+
+        if (repositoryManager) {
+          const gitExtension =
+            vscode.extensions.getExtension("vscode.git")?.exports;
+          if (gitExtension) {
+            const api = gitExtension.getAPI(1);
+            if (api && api.repositories.length > 0) {
+              try {
+                const repo = api.repositories[0];
+                const headCommit = repo.state.HEAD?.commit;
+
+                logInfo(`Found latest commit: ${headCommit}`);
+
+                if (headCommit) {
+                  // Use the direct processing method
+                  const repoPath = repo.rootUri.fsPath;
+                  const branch = repo.state.HEAD?.name || "unknown";
+
+                  await repositoryManager.processCommitDirectly(
+                    repoPath,
+                    headCommit,
+                    branch
+                  );
+                  vscode.window.showInformationMessage(
+                    `Forced logging of commit: ${headCommit}`
+                  );
+                } else {
+                  vscode.window.showErrorMessage("No HEAD commit found");
 						}
 					} catch (error) {
 						logError(`Error checking commit author: ${error}`);
