@@ -147,12 +147,41 @@ export async function getCommitAuthorDetails(
  * @returns The repository name
  */
 export async function getRepoNameFromRemote(repoPath: string): Promise<string> {
-  const git: SimpleGit = simpleGit(repoPath);
-  const remotes = await git.getRemotes(true);
-  const origin = remotes.find(remote => remote.name === 'origin');
+  try {
+    logInfo(`Getting repository name from remote for: ${repoPath}`);
 
-  if (!origin) {
-    throw new Error('No origin remote found');
+    // Get the remote URL
+    let remoteUrl = "";
+    try {
+      remoteUrl = await executeGitCommand(
+        repoPath,
+        "config --get remote.origin.url"
+      );
+    } catch (error) {
+      // Silently handle the case where there's no remote configured
+      logInfo("No remote origin found, using directory name");
+      return path.basename(repoPath);
+    }
+
+    // If no remote origin is found, use the directory name
+    if (!remoteUrl) {
+      logInfo("No remote origin URL found, using directory name");
+      return path.basename(repoPath);
+    }
+
+    // Remove .git suffix if present
+    if (remoteUrl.endsWith(".git")) {
+      remoteUrl = remoteUrl.slice(0, -4);
+    }
+
+    // Extract the repository name from the URL
+    const repoName = path.basename(remoteUrl);
+    logInfo(`Retrieved repository name: ${repoName}`);
+    return repoName;
+  } catch (error) {
+    logError(`Failed to get repository name: ${error}`);
+    // Fall back to using the directory name
+    return path.basename(repoPath);
   }
 
   const url = origin.refs.fetch;
