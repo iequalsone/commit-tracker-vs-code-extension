@@ -228,45 +228,135 @@ export async function activate(context: vscode.ExtensionContext) {
                 } else {
                   vscode.window.showErrorMessage("No HEAD commit found");
 						}
+
+                statusBarItem.text = "$(git-commit) Tracking";
 					} catch (error) {
-						logError(`Error checking commit author: ${error}`);
-						return;
+                logError(`Error in force logging: ${error}`);
+                vscode.window.showErrorMessage(`Error: ${error}`);
+                statusBarItem.text = "$(error) Error";
 					}
-				}
+            } else {
+              vscode.window.showErrorMessage("No Git repositories found");
+              statusBarItem.text = "$(error) No Repos";
+            }
+          } else {
+            vscode.window.showErrorMessage("Git extension not found");
+            statusBarItem.text = "$(error) Git Not Found";
+          }
+        } else {
+          vscode.window.showErrorMessage("Repository manager not initialized");
+          statusBarItem.text = "$(error) Not Initialized";
+        }
+      }
+    )
+  );
 
-				try {
-					const logPath = path.join(logFilePath, logFile);
-					if (fs.existsSync(logPath)) {
-						const logContent = fs.readFileSync(logPath, 'utf8');
-						if (logContent.includes(headCommit)) {
-							return;
-						}
-					}
-				} catch (error) {
-					logError(`Error checking commits.log: ${error}`);
-				}
+  // Add this command to your extension.ts file
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.showDebugInfo",
+      async () => {
+        try {
+          showOutputChannel(false); // Show and focus the output channel
+          logInfo("=== DEBUG INFORMATION ===");
 
-				lastProcessedCommit = headCommit;
-				await context.globalState.update('lastProcessedCommit', headCommit);
+          // Log extension configuration
+          const config = vscode.workspace.getConfiguration("commitTracker");
+          const logFilePath = config.get<string>("logFilePath") || "not set";
+          const logFile = config.get<string>("logFile") || "not set";
+          const excludedBranches =
+            config.get<string[]>("excludedBranches") || [];
 
-				try {
-					const message = await getCommitMessage(repoPath, headCommit);
-					const commitDate = new Date().toISOString();
-					const author = await getCommitAuthorDetails(repoPath, headCommit);
-					const repoName = await getRepoNameFromRemote(repoPath);
+          logInfo(
+            `Configuration: Log path: ${logFilePath}, Log file: ${logFile}`
+          );
+          logInfo(`Excluded branches: ${excludedBranches.join(", ")}`);
 
-					const logMessage = `Commit: ${headCommit}
-Message: ${message}
-Author: ${author}
-Date: ${commitDate}
-Branch: ${branch}
-Repository: ${repoName}
-Repository Path: ${repoPath}\n\n`;
+          // Check if log directory exists and is writable
+          try {
+            if (fs.existsSync(logFilePath)) {
+              logInfo(`Log directory exists: Yes`);
 
-					const trackingFilePath = path.join(logFilePath, logFile);
-					try {
-						if (!validatePath(trackingFilePath)) {
-							throw new Error('Invalid tracking file path.');
+              // Check if it's writable
+              const testFile = path.join(logFilePath, ".write-test");
+              fs.writeFileSync(testFile, "test");
+              fs.unlinkSync(testFile);
+              logInfo("Log directory is writable: Yes");
+
+              // Check if it's a git repository
+              if (fs.existsSync(path.join(logFilePath, ".git"))) {
+                logInfo("Log directory is a Git repository: Yes");
+
+                // Check remote configuration
+                const gitExtension =
+                  vscode.extensions.getExtension("vscode.git")?.exports;
+                if (gitExtension) {
+                  const api = gitExtension.getAPI(1);
+                  // Find the repository that matches the log path
+                  const trackerRepo = api.repositories.find(
+                    (repo: any) => repo.rootUri.fsPath === logFilePath
+                  );
+
+                  if (trackerRepo) {
+                    logInfo(
+                      "Tracker repository is recognized by VS Code Git extension: Yes"
+                    );
+
+                    // Show remote information
+                    try {
+                      const remotes = await executeGitCommand(
+                        logFilePath,
+                        "remote -v"
+                      );
+                      logInfo(`Configured remotes:\n${remotes || "None"}`);
+
+                      const currentBranch = await executeGitCommand(
+                        logFilePath,
+                        "rev-parse --abbrev-ref HEAD"
+                      );
+                      logInfo(`Current branch: ${currentBranch}`);
+
+                      try {
+                        const trackingBranch = await executeGitCommand(
+                          logFilePath,
+                          `rev-parse --abbrev-ref ${currentBranch}@{upstream}`
+                        );
+                        logInfo(`Tracking branch: ${trackingBranch}`);
+                      } catch (error) {
+                        logInfo("No tracking branch configured");
+                      }
+
+                      const status = await executeGitCommand(
+                        logFilePath,
+                        "status -s"
+                      );
+                      logInfo(`Git status:\n${status || "Clean"}`);
+                    } catch (error) {
+                      logInfo(`Error getting Git information: ${error}`);
+                    }
+                  } else {
+                    logInfo(
+                      "Tracker repository is not recognized by VS Code Git extension"
+                    );
+                  }
+                }
+              } else {
+                logInfo("Log directory is a Git repository: No");
+              }
+
+              // Check log file
+              const fullLogPath = path.join(logFilePath, logFile);
+              if (fs.existsSync(fullLogPath)) {
+                const stats = fs.statSync(fullLogPath);
+                logInfo(`Log file exists: Yes, size: ${stats.size} bytes`);
+
+                // Read the last few lines of the log
+                const content = fs.readFileSync(fullLogPath, "utf8");
+                const lines = content.split("\n");
+                const lastLines = lines.slice(-20).join("\n");
+                logInfo(`Last lines of log file:\n${lastLines}`);
+              } else {
+                logInfo("Log file exists: No");
 						}
 						ensureDirectoryExists(trackingFilePath);
 					} catch (err) {
