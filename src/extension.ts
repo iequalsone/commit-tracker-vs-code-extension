@@ -61,7 +61,7 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     } catch (error) {
       logError(`Error updating status bar: ${error}`);
-	}
+    }
   }
 
   // Set up periodic checking for unpushed commits
@@ -77,14 +77,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Check if Git extension is available
   const gitExtension = vscode.extensions.getExtension("vscode.git")?.exports;
-	if (!gitExtension) {
+  if (!gitExtension) {
     const message =
       "Git extension is not available. Please ensure Git is installed and the Git extension is enabled.";
     logError(message);
     vscode.window.showErrorMessage(message);
     statusBarItem.text = "$(error) Git Not Found";
-		return;
-	}
+    return;
+  }
 
   // Validate configuration
   const isValidConfig = await validateConfig();
@@ -96,8 +96,8 @@ export async function activate(context: vscode.ExtensionContext) {
       "Commit Tracker: Invalid configuration. Please update settings."
     );
     statusBarItem.text = "$(warning) Config Error";
-		return;
-	}
+    return;
+  }
 
   logInfo("Commit Tracker configuration validated successfully");
 
@@ -111,8 +111,8 @@ export async function activate(context: vscode.ExtensionContext) {
     logError(message);
     vscode.window.showErrorMessage(message);
     statusBarItem.text = "$(warning) Init Failed";
-					return;
-				}
+    return;
+  }
 
   logInfo("Commit Tracker repository manager initialized successfully");
   vscode.window.showInformationMessage(
@@ -227,14 +227,14 @@ export async function activate(context: vscode.ExtensionContext) {
                   );
                 } else {
                   vscode.window.showErrorMessage("No HEAD commit found");
-						}
+                }
 
                 statusBarItem.text = "$(git-commit) Tracking";
-					} catch (error) {
+              } catch (error) {
                 logError(`Error in force logging: ${error}`);
                 vscode.window.showErrorMessage(`Error: ${error}`);
                 statusBarItem.text = "$(error) Error";
-					}
+              }
             } else {
               vscode.window.showErrorMessage("No Git repositories found");
               statusBarItem.text = "$(error) No Repos";
@@ -357,68 +357,156 @@ export async function activate(context: vscode.ExtensionContext) {
                 logInfo(`Last lines of log file:\n${lastLines}`);
               } else {
                 logInfo("Log file exists: No");
-						}
-						ensureDirectoryExists(trackingFilePath);
-					} catch (err) {
-						logError('Failed to ensure directory exists:', err);
-						return;
-					}
+              }
+            } else {
+              logInfo("Log directory exists: No");
+            }
+          } catch (error) {
+            logInfo(`Error checking log directory: ${error}`);
+          }
 
-					if (excludedBranches.includes(branch)) {
-						logInfo(`Skipping logging for branch: ${branch}`);
-						return;
-					}
+          // Show information about active repositories
+          const gitExtension =
+            vscode.extensions.getExtension("vscode.git")?.exports;
+          if (gitExtension) {
+            const api = gitExtension.getAPI(1);
+            logInfo(
+              `Number of active Git repositories: ${api.repositories.length}`
+            );
 
-					try {
-						await appendToFile(trackingFilePath, logMessage);
-						logInfo('Commit details logged to commits.log');
-					} catch (err) {
-						logError('Failed to write to commits.log:', err);
-						return;
-					}
+            for (const repo of api.repositories) {
+              logInfo(`Repository: ${repo.rootUri.fsPath}`);
+              logInfo(`Current HEAD: ${repo.state.HEAD?.commit || "None"}`);
+              logInfo(`Current branch: ${repo.state.HEAD?.name || "None"}`);
+            }
+          }
 
-					try {
-						await pushChanges(logFilePath, trackingFilePath);
-						logInfo('Changes pushed to the tracking repository');
-					} catch (err) {
-						logError('Failed to push changes to the tracking repository:', err);
-					}
-				} catch (err) {
-					logError('Failed to process commit:', err);
-				}
-			}, 300);
+          logInfo("=== END DEBUG INFORMATION ===");
+          vscode.window.showInformationMessage(
+            "Debug information logged to output channel"
+          );
+        } catch (error) {
+          logError(`Error getting debug information: ${error}`);
+          vscode.window.showErrorMessage(
+            `Error getting debug information: ${error}`
+          );
+        }
+      }
+    )
+  );
 
-			const listener = repo.state.onDidChange(debouncedOnDidChange);
-			const disposableListener = { dispose: () => listener };
-			context.subscriptions.push(disposableListener);
-			disposableManager.register(disposableListener);
-		});
-	}
+  // Add this to your extension.ts file
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.pushTrackerChanges",
+      async () => {
+        try {
+          const config = vscode.workspace.getConfiguration("commitTracker");
+          const logFilePath = config.get<string>("logFilePath");
 
-	context.subscriptions.push(
-		vscode.workspace.onDidChangeConfiguration(async (e) => {
-			if (e.affectsConfiguration('commitTracker')) {
-				const isValid = await validateConfig();
-				if (isValid) {
-					const updatedConfig = vscode.workspace.getConfiguration('commitTracker');
-					logFilePath = updatedConfig.get<string>('logFilePath')!;
-					logFile = updatedConfig.get<string>('logFile')!;
-					excludedBranches = updatedConfig.get<string[]>('excludedBranches')!;
-					logInfo('Configuration updated');
-				} else {
-					logError('Configuration validation failed after changes.');
-				}
-			}
-		})
-	);
+          if (!logFilePath) {
+            vscode.window.showErrorMessage("Log file path not configured");
+            return;
+          }
 
-	context.subscriptions.push(
-		vscode.commands.registerCommand('commit-tracker.selectLogFolder', selectLogFolder)
-	);
+          logInfo("Manually pushing tracking repository changes");
+          showOutputChannel(false); // Show and focus the output
+          statusBarItem.text = "$(sync~spin) Pushing...";
+
+          // Create and execute a more detailed script
+          const scriptPath = path.join(
+            os.tmpdir(),
+            `git-manual-push-${Date.now()}.sh`
+          );
+
+          // Create a script that shows detailed information and auto-closes
+          const scriptContent = `#!/bin/bash
+  # Manual push script
+  echo "=== Commit Tracker Manual Push ==="
+  echo "Current directory: ${logFilePath}"
+  cd "${logFilePath}"
+  echo "Git status:"
+  git status
+  echo "Pushing changes..."
+  git push
+  PUSH_RESULT=$?
+  echo "Push complete, new status:"
+  git status
+  
+  if [ $PUSH_RESULT -eq 0 ]; then
+    echo "Push successful!"
+  else
+    echo "Push failed with status $PUSH_RESULT"
+    echo "You may need to push manually or set up credentials"
+  fi
+  
+  echo "Terminal will close in 5 seconds..."
+  sleep 5
+  `;
+
+          fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+
+          // Use the VS Code terminal to run the script so the user can see the output and respond to prompts
+          const terminal = vscode.window.createTerminal({
+            name: "Commit Tracker",
+            hideFromUser: false, // Initially show to the user
+            location: vscode.TerminalLocation.Panel, // Put it in the panel
+            isTransient: true, // Mark as transient so it can be reused
+          });
+          // Show it but don't focus it (keep user in their code)
+          terminal.show(false);
+          terminal.sendText(`bash "${scriptPath}" && exit || exit`);
+
+          // We can't tell if the push succeeded since it's in a terminal, but we can update the UI
+          statusBarItem.text = "$(git-commit) Tracking";
+          vscode.window.showInformationMessage("Push command sent to terminal");
+
+          // Clean up the script after a delay
+          setTimeout(() => {
+            try {
+              fs.unlinkSync(scriptPath);
+            } catch (e) {
+              // Ignore errors cleaning up the script
+            }
+          }, 10000);
+
+          // Update status after a reasonable delay
+          setTimeout(() => {
+            updateStatusBarWithUnpushedStatus();
+          }, 10000);
+        } catch (error) {
+          logError(`Manual push failed: ${error}`);
+          statusBarItem.text = "$(error) Push Failed";
+          vscode.window.showErrorMessage(`Push failed: ${error}`);
+
+          // Restore normal status after a delay
+          setTimeout(() => {
+            statusBarItem.text = "$(git-commit) Tracking";
+          }, 5000);
+        }
+      }
+    )
+  );
+
+  // Register the checkUnpushedStatus command
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.checkUnpushedStatus",
+      async () => {
+        try {
+          await updateStatusBarWithUnpushedStatus();
+          return true;
+        } catch (error) {
+          logError(`Failed to check unpushed status: ${error}`);
+          return false;
+        }
+      }
+    )
+  );
 }
 
 export function deactivate(): void {
-	const disposableManager = DisposableManager.getInstance();
-	disposableManager.dispose();
-	vscode.window.showInformationMessage('Commit Tracker deactivated.');
+  const disposableManager = DisposableManager.getInstance();
+  disposableManager.dispose();
+  vscode.window.showInformationMessage("Commit Tracker deactivated.");
 }
