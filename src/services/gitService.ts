@@ -675,23 +675,232 @@ export async function hasUnpushedCommits(
         `rev-parse --abbrev-ref ${currentBranch}@{upstream}`
       );
 
-    if (!hasOrigin) {
-      throw new Error('No origin remote configured for the repository.');
-    }
+      if (!trackingBranch) {
+        return false; // No tracking branch
+      }
 
-    await git.add(trackingFilePath);
-    await git.commit('Update commit log');
-    await git.push('origin', 'main');
-  });
+      // Check for unpushed commits
+      const unpushedCount = await executeGitCommand(
+        logFilePath,
+        `rev-list --count ${trackingBranch}..${currentBranch}`
+      );
+
+      return parseInt(unpushedCount, 10) > 0;
+    } catch (error) {
+      return false; // No tracking branch or other error
+    }
+  } catch (error) {
+    logError(`Error checking for unpushed commits: ${error}`);
+    return false;
+  }
 }
 
-export async function pullChanges(repoPath: string): Promise<void> {
-  await vscode.window.withProgress({
-    location: vscode.ProgressLocation.SourceControl,
-    title: 'Pulling latest changes...',
-    cancellable: false
-  }, async () => {
-    const git: SimpleGit = simpleGit(repoPath);
-    await git.pull('origin', 'main');
+/**
+ * Pushes changes to the tracking repository using a hidden process
+ * @param logFilePath Path to the log file directory
+ * @param filePath Path to the file that was changed
+ * @returns A promise that resolves when the push operation has started
+ */
+export async function pushChangesWithHiddenTerminal(
+  logFilePath: string,
+  filePath: string
+): Promise<void> {
+  try {
+    logInfo(`Pushing changes to tracking repository using hidden process`);
+
+    // Create a temporary shell script
+    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+    const logFileName = path.join(
+      os.tmpdir(),
+      `git-push-log-${Date.now()}.txt`
+    );
+
+    // Write a more robust script with error handling and logging
+    const scriptContent = `#!/bin/bash
+# Commit-tracker hidden push script
+
+# Log both to stdout and a file
+exec > >(tee "${logFileName}") 2>&1
+
+echo "=== Commit Tracker Background Push ==="
+echo "Started at: $(date -Iseconds)"
+echo "Repository: ${logFilePath}"
+echo "File: ${filePath}"
+
+# Change to the repository directory
+cd "${logFilePath}" || { echo "Failed to change to repository directory"; exit 1; }
+
+# Get current status before changes
+echo "Git status before:"
+git status
+
+# Stage the file
+echo "Adding file: ${filePath}"
+git add "${filePath}"
+if [ $? -ne 0 ]; then
+  echo "Failed to add file"
+  exit 1
+fi
+
+# Check if there are changes to commit
+if git status --porcelain | grep -q .; then
+  echo "Changes detected, committing..."
+  git commit -m "Update commit log - $(date -Iseconds)"
+  if [ $? -ne 0 ]; then
+    echo "Failed to commit changes"
+    exit 1
+  fi
+  echo "Commit successful"
+else
+  echo "No changes to commit"
+  exit 0
+fi
+
+# Check if remote exists
+if git remote | grep -q origin; then
+  echo "Remote 'origin' exists"
+  
+  # Get current branch
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  echo "Current branch: $CURRENT_BRANCH"
+  
+  # Try to push with full authentication allowed and higher timeout
+  echo "Pushing changes..."
+  export GIT_TERMINAL_PROMPT=1
+  export GIT_ASKPASS=
+  
+  # First try: normal push
+  echo "Attempt 1: Standard push"
+  git push
+  PUSH_RESULT=$?
+  
+  if [ $PUSH_RESULT -ne 0 ]; then
+    echo "Standard push failed with code $PUSH_RESULT"
+    
+    # Second try: push with upstream setting
+    echo "Attempt 2: Push with upstream tracking"
+    git push -u origin $CURRENT_BRANCH
+    PUSH_RESULT=$?
+    
+    if [ $PUSH_RESULT -ne 0 ]; then
+      echo "Push with upstream tracking failed with code $PUSH_RESULT"
+      
+      # Third try: force push
+      echo "Attempt 3: Force push"
+      git push --force-with-lease
+      PUSH_RESULT=$?
+      
+      if [ $PUSH_RESULT -ne 0 ]; then
+        echo "Force push failed with code $PUSH_RESULT"
+        echo "All push attempts failed"
+        echo "Repository status after failed pushes:"
+        git status
+        exit 1
+      else
+        echo "Force push successful"
+      fi
+    else
+      echo "Push with upstream tracking successful"
+    fi
+  else
+    echo "Standard push successful"
+  fi
+else
+  echo "No remote 'origin' configured, skipping push"
+fi
+
+echo "Repository status after operations:"
+git status
+
+echo "=== Push operation completed at $(date -Iseconds) ==="
+exit 0
+`;
+
+    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+
+    logInfo(`Created temporary script at ${scriptPath}`);
+
+    // Execute the script in a process that can handle credentials properly
+    return new Promise<void>((resolve) => {
+      const { exec } = require("child_process");
+
+      // Set a longer timeout for network operations
+      const childProcess = exec(
+        `bash "${scriptPath}"`,
+        { timeout: 60000 },
+        (error: any, stdout: string, stderr: string) => {
+          // Log the output regardless of result
+          if (fs.existsSync(logFileName)) {
+            try {
+              const logContent = fs.readFileSync(logFileName, "utf8");
+              logInfo(`Push script output:\n${logContent}`);
+
+              // Check the log for push success
+              if (
+                logContent.includes("push successful") ||
+                logContent.includes("Push successful")
+              ) {
+                logInfo("Push operation completed successfully");
+
+                // Schedule a status update
+                setTimeout(() => {
+                  try {
+                    const vscode = require("vscode");
+                    vscode.commands.executeCommand(
+                      "commit-tracker.checkUnpushedStatus"
+                    );
+                  } catch (e) {
+                    // Ignore errors updating status
+                  }
+                }, 2000);
+              } else if (logContent.includes("All push attempts failed")) {
+                logError(
+                  "All push attempts failed, changes committed locally only"
+                );
+              }
+
+              // Cleanup log file
+              fs.unlinkSync(logFileName);
+            } catch (readError) {
+              logError(`Failed to read push log: ${readError}`);
+            }
+          }
+
+          // Clean up the script file
+          try {
+            fs.unlinkSync(scriptPath);
+            logInfo(`Removed temporary script: ${scriptPath}`);
+          } catch (e) {
+            logInfo(`Failed to remove temporary script: ${e}`);
+          }
+
+          if (error) {
+            logError(`Push script exited with error: ${error}`);
+            // Don't reject, we've already logged the commit successfully
+          }
+
+          // Always resolve, since we've already logged the commit
+          resolve();
+        }
+      );
+
+      // Capture real-time output if possible
+      if (childProcess.stdout) {
+        childProcess.stdout.on("data", (data: Buffer) => {
+          logInfo(`Push output: ${data.toString().trim()}`);
+        });
+      }
+
+      if (childProcess.stderr) {
+        childProcess.stderr.on("data", (data: Buffer) => {
+          logInfo(`Push stderr: ${data.toString().trim()}`);
+        });
+      }
+
+      logInfo(`Push operation started in background`);
   });
+  } catch (error) {
+    logError(`Failed to push changes with hidden process: ${error}`);
+    // Don't throw - we want to continue even if push setup fails
+}
 }
