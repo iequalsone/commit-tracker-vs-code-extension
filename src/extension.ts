@@ -7,6 +7,8 @@ import {
   logError,
   initializeLogger,
   showOutputChannel,
+  toggleLogging,
+  setLoggingState,
 } from "./utils/logger";
 import { DisposableManager } from "./utils/DisposableManager";
 import { selectLogFolder, validateConfig } from "./utils/configValidator";
@@ -20,7 +22,16 @@ let repositoryManager: RepositoryManager;
 export async function activate(context: vscode.ExtensionContext) {
   // Create and show output channel immediately
   initializeLogger();
-  showOutputChannel(true);
+
+  // Initialize logging state from configuration
+  const config = vscode.workspace.getConfiguration("commitTracker");
+  const enableLogging = config.get<boolean>("enableLogging", false); // Default to false
+  setLoggingState(enableLogging);
+
+  // Only show the output channel if logging is enabled
+  if (enableLogging) {
+    showOutputChannel(true);
+  }
 
   logInfo("Commit Tracker extension activating...");
 
@@ -119,7 +130,7 @@ export async function activate(context: vscode.ExtensionContext) {
     "Commit Tracker is now monitoring commits"
   );
 
-  // Register commands
+  // Register commands selectLogFolder, logCurrentCommit
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "commit-tracker.selectLogFolder",
@@ -167,6 +178,7 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
+  // startMonitoring
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "commit-tracker.startMonitoring",
@@ -190,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Add this command to your activate function
+  // forceLogLatestCommit
   context.subscriptions.push(
     // In your "commit-tracker.forceLogLatestCommit" command handler:
     vscode.commands.registerCommand(
@@ -251,7 +263,7 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Add this command to your extension.ts file
+  // showDebugInfo
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "commit-tracker.showDebugInfo",
@@ -395,7 +407,7 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Add this to your extension.ts file
+  // pushTrackerChanges
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "commit-tracker.pushTrackerChanges",
@@ -503,6 +515,39 @@ export async function activate(context: vscode.ExtensionContext) {
       }
     )
   );
+
+  // Toggle Logging
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "commit-tracker.toggleLogging",
+      async () => {
+        const isEnabled = toggleLogging();
+        if (isEnabled) {
+          showOutputChannel(false); // Show and focus the output channel
+          vscode.window.showInformationMessage(
+            "Commit Tracker: Logging enabled"
+          );
+          // Update status bar if needed
+          if (statusBarItem.text.includes("Tracking")) {
+            statusBarItem.text = "$(git-commit) Tracking $(output)";
+          }
+        } else {
+          vscode.window.showInformationMessage(
+            "Commit Tracker: Logging disabled"
+          );
+          // Update status bar if needed
+          if (statusBarItem.text.includes("$(output)")) {
+            statusBarItem.text = statusBarItem.text.replace(" $(output)", "");
+          }
+        }
+      }
+    )
+  );
+
+  // Update status bar to show logging state if enabled
+  if (enableLogging && statusBarItem.text.includes("Tracking")) {
+    statusBarItem.text = "$(git-commit) Tracking $(output)";
+  }
 }
 
 export function deactivate(): void {
