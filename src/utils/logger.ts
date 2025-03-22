@@ -1,75 +1,56 @@
 import * as vscode from "vscode";
 
-// Create an output channel to log messages
-let outputChannel: vscode.OutputChannel | undefined;
+let outputChannel: vscode.OutputChannel;
+let isLoggingEnabled = false; // Default to disabled logging
 
-/**
- * Initialize the logger with a new output channel
- */
 export function initializeLogger(): void {
-  if (!outputChannel) {
-    outputChannel = vscode.window.createOutputChannel("Commit Tracker");
-  }
+  outputChannel = vscode.window.createOutputChannel("Commit Tracker");
 }
 
-/**
- * Show the output channel
- * @param preserveFocus Whether to preserve focus (true) or switch to the output channel (false)
- */
-export function showOutputChannel(preserveFocus: boolean = true): void {
-  if (outputChannel) {
-    outputChannel.show(preserveFocus);
-  }
+export function showOutputChannel(preserveFocus: boolean): void {
+  outputChannel.show(preserveFocus);
 }
 
-/**
- * Log an informational message
- * @param message The message to log
- */
 export function logInfo(message: string): void {
-  if (!outputChannel) {
-    initializeLogger();
-  }
-
-  if (outputChannel) {
+  if (isLoggingEnabled) {
     const timestamp = new Date().toISOString();
     outputChannel.appendLine(`[INFO][${timestamp}] ${message}`);
   }
 }
 
-/**
- * Log an error message
- * @param message The error message to log
- * @param error Optional error object
- */
-export function logError(message: string, error?: any): void {
-  if (!outputChannel) {
-    initializeLogger();
-  }
-
-  if (outputChannel) {
-    const timestamp = new Date().toISOString();
-    outputChannel.appendLine(`[ERROR][${timestamp}] ${message}`);
-
-    if (error) {
-      if (error instanceof Error) {
-        outputChannel.appendLine(`Error details: ${error.message}`);
-        if (error.stack) {
-          outputChannel.appendLine(`Stack trace: ${error.stack}`);
-        }
-      } else {
-        outputChannel.appendLine(`Error details: ${JSON.stringify(error)}`);
-      }
-    }
-  }
+export function logError(message: string): void {
+  // We always log errors, even if general logging is disabled
+  const timestamp = new Date().toISOString();
+  outputChannel.appendLine(`[ERROR][${timestamp}] ${message}`);
 }
 
-/**
- * Dispose of the output channel
- */
-export function disposeLogger(): void {
-  if (outputChannel) {
-    outputChannel.dispose();
-    outputChannel = undefined;
+export function toggleLogging(): boolean {
+  isLoggingEnabled = !isLoggingEnabled;
+
+  // Log the state change (this will only appear if logging is now enabled)
+  if (isLoggingEnabled) {
+    logInfo("Logging enabled");
+  } else {
+    // This one last message even though logging is disabled
+    const timestamp = new Date().toISOString();
+    outputChannel.appendLine(`[INFO][${timestamp}] Logging disabled`);
+  }
+
+  // Also update configuration to persist the setting
+  vscode.workspace
+    .getConfiguration("commitTracker")
+    .update(
+      "enableLogging",
+      isLoggingEnabled,
+      vscode.ConfigurationTarget.Global
+    );
+
+  return isLoggingEnabled;
+}
+
+export function setLoggingState(enabled: boolean): void {
+  isLoggingEnabled = enabled;
+  if (isLoggingEnabled) {
+    logInfo("Logging initialized and enabled");
   }
 }
