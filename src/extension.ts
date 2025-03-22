@@ -1,64 +1,116 @@
-import * as vscode from 'vscode';
-import * as path from 'path';
-import * as fs from 'fs';
-import { getCommitAuthorDetails, getCommitMessage, getRepoNameFromRemote, pullChanges, pushChanges } from './services/gitService';
-import { ensureDirectoryExists, appendToFile, validatePath } from './services/fileService';
-import { logInfo, logError } from './utils/logger';
-import { debounce } from './utils/debounce';
-import { DisposableManager } from './utils/DisposableManager';
-import { selectLogFolder, validateConfig } from './utils/configValidator';
+import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
+import * as os from "os";
+import {
+  logInfo,
+  logError,
+  initializeLogger,
+  showOutputChannel,
+} from "./utils/logger";
+import { DisposableManager } from "./utils/DisposableManager";
+import { selectLogFolder, validateConfig } from "./utils/configValidator";
+import { RepositoryManager } from "./managers/RepositoryManager";
+import { executeGitCommand, hasUnpushedCommits } from "./services/gitService";
 
-let logFilePath: string;
-let logFile: string;
-let excludedBranches: string[];
+// Add this line at the top level of the file
+let statusBarItem: vscode.StatusBarItem;
+let repositoryManager: RepositoryManager;
 
 export async function activate(context: vscode.ExtensionContext) {
-	const isValidConfig = await validateConfig();
-	if (!isValidConfig) {
-		return;
+  // Create and show output channel immediately
+  initializeLogger();
+  showOutputChannel(true);
+
+  logInfo("Commit Tracker extension activating...");
+
+  // Create status bar item
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  statusBarItem.text = "$(git-commit) Tracking";
+  statusBarItem.tooltip = "Commit Tracker is active";
+  statusBarItem.command = "commit-tracker.logCurrentCommit";
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
+  /**
+   * Updates the status bar to show if there are unpushed commits
+   */
+  async function updateStatusBarWithUnpushedStatus() {
+    try {
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const logFilePath = config.get<string>("logFilePath");
+
+      if (!logFilePath) {
+        return; // No log path configured
+      }
+
+      const hasUnpushed = await hasUnpushedCommits(logFilePath);
+
+      if (hasUnpushed) {
+        statusBarItem.text = "$(git-commit) Unpushed Logs";
+        statusBarItem.tooltip =
+          "Commit Tracker has unpushed logs - click to push";
+        statusBarItem.command = "commit-tracker.pushTrackerChanges";
+      } else {
+        statusBarItem.text = "$(git-commit) Tracking";
+        statusBarItem.tooltip = "Commit Tracker is active";
+        statusBarItem.command = "commit-tracker.logCurrentCommit";
+      }
+    } catch (error) {
+      logError(`Error updating status bar: ${error}`);
 	}
+  }
 
-	logInfo('Commit Tracker extension activated');
-	const disposableManager = DisposableManager.getInstance();
+  // Set up periodic checking for unpushed commits
+  const checkInterval = setInterval(updateStatusBarWithUnpushedStatus, 60000); // Check every minute
 
-	const config = vscode.workspace.getConfiguration('commitTracker');
-	logFilePath = config.get<string>('logFilePath')!;
-	logFile = config.get<string>('logFile')!;
+  // Clean up the interval when deactivating
+  context.subscriptions.push({
+    dispose: () => clearInterval(checkInterval),
+  });
 
-	try {
-		await pullChanges(logFilePath);
-		logInfo('Successfully pulled latest changes from tracking repository');
-	} catch (err) {
-		logError('Failed to pull changes from tracking repository:', err);
-	}
+  // Initial check
+  updateStatusBarWithUnpushedStatus();
 
-	excludedBranches = config.get<string[]>('excludedBranches')!;
-	let lastProcessedCommit: string | null = context.globalState.get('lastProcessedCommit', null);
-
-	const gitExtension = vscode.extensions.getExtension('vscode.git')?.exports;
+  // Check if Git extension is available
+  const gitExtension = vscode.extensions.getExtension("vscode.git")?.exports;
 	if (!gitExtension) {
-		logError('Git extension is not available. Please ensure Git is installed and the Git extension is enabled.');
+    const message =
+      "Git extension is not available. Please ensure Git is installed and the Git extension is enabled.";
+    logError(message);
+    vscode.window.showErrorMessage(message);
+    statusBarItem.text = "$(error) Git Not Found";
 		return;
 	}
 
-	const api = gitExtension.getAPI(1);
-	if (!api) {
-		logError('Failed to get Git API. Please ensure the Git extension is enabled.');
+  // Validate configuration
+  const isValidConfig = await validateConfig();
+  if (!isValidConfig) {
+    logError(
+      "Invalid configuration. Please update settings and restart the extension."
+    );
+    vscode.window.showErrorMessage(
+      "Commit Tracker: Invalid configuration. Please update settings."
+    );
+    statusBarItem.text = "$(warning) Config Error";
 		return;
 	}
 
-	if (api) {
-		logInfo('Git API available');
-		const activeRepos = api.repositories.filter((repo: any) => repo.state.HEAD);
-		activeRepos.forEach((repo: { state: { HEAD: { commit: any; name: any; }; onDidChange: (arg0: () => void) => void; }; rootUri: { fsPath: any; }; }) => {
-			logInfo('Processing repository:');
-			const debouncedOnDidChange = debounce(async () => {
-				const headCommit = repo.state.HEAD?.commit;
-				const branch = repo.state.HEAD?.name;
-				const repoPath = repo.rootUri.fsPath;
+  logInfo("Commit Tracker configuration validated successfully");
 
-				if (!headCommit) {
-					logError('No HEAD commit found. Please ensure the repository is in a valid state.');
+  // Initialize repository manager
+  repositoryManager = new RepositoryManager(context);
+  const initialized = await repositoryManager.initialize();
+
+  if (!initialized) {
+    const message =
+      "Failed to initialize repository manager. Check logs for details.";
+    logError(message);
+    vscode.window.showErrorMessage(message);
+    statusBarItem.text = "$(warning) Init Failed";
 					return;
 				}
 
