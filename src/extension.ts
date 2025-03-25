@@ -14,6 +14,7 @@ import { DisposableManager } from "./utils/DisposableManager";
 import { selectLogFolder, validateConfig } from "./utils/configValidator";
 import { RepositoryManager } from "./managers/RepositoryManager";
 import { executeGitCommand, hasUnpushedCommits } from "./services/gitService";
+import { SetupWizard } from "./utils/setupWizard";
 
 // Add this line at the top level of the file
 let statusBarItem: vscode.StatusBarItem;
@@ -34,6 +35,39 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   logInfo("Commit Tracker extension activating...");
+
+  // Check if setup has been completed
+  const setupComplete = context.globalState.get<boolean>("setupComplete");
+  if (!setupComplete) {
+    logInfo("First-time setup required. Starting wizard...");
+    const setupWizard = new SetupWizard(context);
+
+    // Show initial notification
+    vscode.window
+      .showInformationMessage(
+        "Welcome to Commit Tracker! Setting up your tracking repository...",
+        "Configure Now"
+      )
+      .then((selection) => {
+        if (selection === "Configure Now") {
+          // Launch setup wizard
+          setupWizard.run().then((success) => {
+            if (success) {
+              validateConfig().then((isValidConfig) => {
+                if (isValidConfig) {
+                  repositoryManager = new RepositoryManager(context);
+                  repositoryManager.initialize().then(() => {
+                    vscode.window.showInformationMessage(
+                      "Commit Tracker is now configured and active"
+                    );
+                  });
+                }
+              });
+            }
+          });
+        }
+      });
+  }
 
   // Create status bar item
   statusBarItem = vscode.window.createStatusBarItem(
@@ -107,6 +141,37 @@ export async function activate(context: vscode.ExtensionContext) {
       "Commit Tracker: Invalid configuration. Please update settings."
     );
     statusBarItem.text = "$(warning) Config Error";
+
+    // Offer to run setup wizard if configuration is invalid
+    const setupOption = await vscode.window.showErrorMessage(
+      "Commit Tracker: Invalid configuration. Would you like to run the setup wizard?",
+      "Yes",
+      "No"
+    );
+
+    if (setupOption === "Yes") {
+      const setupWizard = new SetupWizard(context);
+      const success = await setupWizard.run();
+
+      if (success) {
+        // Re-validate config
+        const newIsValidConfig = await validateConfig();
+        if (newIsValidConfig) {
+          // Continue initialization
+          repositoryManager = new RepositoryManager(context);
+          const initialized = await repositoryManager.initialize();
+
+          if (initialized) {
+            statusBarItem.text = "$(git-commit) Tracking";
+            vscode.window.showInformationMessage(
+              "Commit Tracker is now monitoring commits"
+            );
+            return;
+          }
+        }
+      }
+    }
+
     return;
   }
 
@@ -542,6 +607,57 @@ export async function activate(context: vscode.ExtensionContext) {
         }
       }
     )
+  );
+
+  // Setup Tracker command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("commit-tracker.setupTracker", async () => {
+      logInfo("Starting tracker setup wizard");
+      showOutputChannel(true);
+
+      const setupWizard = new SetupWizard(context);
+      const success = await setupWizard.run();
+
+      if (success) {
+        // Re-validate config and initialize
+        const isValidConfig = await validateConfig();
+        if (isValidConfig) {
+          if (repositoryManager) {
+            // If repositoryManager already exists, dispose it first
+            const disposableManager = DisposableManager.getInstance();
+            disposableManager.dispose();
+          }
+
+          // Create a new repository manager
+          repositoryManager = new RepositoryManager(context);
+          await repositoryManager.initialize();
+          vscode.window.showInformationMessage(
+            "Commit Tracker is now configured and active"
+          );
+
+          // Update status bar
+          statusBarItem.text = "$(git-commit) Tracking";
+          statusBarItem.tooltip = "Commit Tracker is active";
+          statusBarItem.command = "commit-tracker.logCurrentCommit";
+        }
+      }
+    })
+  );
+
+  // Reset Setup command
+  context.subscriptions.push(
+    vscode.commands.registerCommand("commit-tracker.resetSetup", async () => {
+      const setupWizard = new SetupWizard(context);
+      await setupWizard.resetSetup();
+      vscode.window.showInformationMessage(
+        "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
+      );
+
+      // Update status bar to show configuration needed
+      statusBarItem.text = "$(warning) Setup Needed";
+      statusBarItem.tooltip = "Commit Tracker needs to be set up";
+      statusBarItem.command = "commit-tracker.setupTracker";
+    })
   );
 
   // Update status bar to show logging state if enabled
