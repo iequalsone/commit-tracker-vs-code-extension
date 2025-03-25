@@ -1,21 +1,19 @@
 # Commit Tracker for Visual Studio Code
 
-🚧 **Work in Progress** 🚧
+**Commit Tracker** is a Visual Studio Code extension that simplifies Git commit tracking by logging commit details to a configurable file and pushing changes to a remote repository.
 
-**Commit Tracker** is a Visual Studio Code extension designed to simplify Git commit tracking by logging commit details to a configurable file and optionally pushing changes to a remote repository. This extension is currently under development and may not be fully functional.
+## Features
 
-## Features (Planned & In-Progress)
-
-- **Log File Path Configuration**: Set the directory and file where commit details will be saved.
-- **Automatic Commit Logging**: Track commit details, including:
+- **Automated Commit Logging**: Tracks commit details including:
   - Commit hash
   - Commit message
   - Timestamp
   - Branch name
   - Repository path
-- **Excluded Branches**: Allow users to skip logging for specified branches.
-- **Push Changes to Remote**: Automatically push the updated log file to the repository (coming soon).
-- **Debounced Monitoring**: Efficient tracking to prevent performance degradation in large repositories.
+- **Configurable Log Storage**: Customize where and how commit details are saved
+- **Branch Filtering**: Skip logging for specified branches
+- **Remote Synchronization**: Automatically push log updates to your repository
+- **Performance Optimized**: Efficient tracking with debounced monitoring
 
 ## Current Status
 
@@ -48,6 +46,13 @@
   "commitTracker.pushToRemote": true
 }
 ```
+
+### Configuration Options
+
+- **logFilePath**: Directory where log files will be stored
+- **logFile**: Name of the log file (supports .log, .txt, .json)
+- **excludedBranches**: Array of branch names to ignore
+- **pushToRemote**: Enable/disable automatic pushing of log files
 
 ## Usage
 
@@ -110,6 +115,17 @@ npm install
 - Enhance multi-repo support.
 - Provide a more user-friendly configuration interface.
 - Add automated tests and CI/CD pipeline.
+
+---
+
+## Troubleshooting
+
+If you encounter issues:
+
+1. Ensure Git is properly configured in VS Code
+2. Verify write permissions for the log file location
+3. Check that your Git credentials are properly set up
+4. Confirm the configured branches exist in your repository
 
 ---
 
