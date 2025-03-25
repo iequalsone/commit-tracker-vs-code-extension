@@ -6,10 +6,7 @@ import {
   getCommitMessage,
   getRepoNameFromRemote,
   pullChanges,
-  pushChanges,
   pushChangesWithShellScript,
-  pushChangesWithSpawn,
-  pushChangesWithHiddenTerminal,
 } from "../services/gitService";
 import {
   ensureDirectoryExists,
