@@ -76,12 +76,12 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // Set up periodic checking for unpushed commits
-  // const checkInterval = setInterval(updateStatusBarWithUnpushedStatus, 60000); // Check every minute
+  const checkInterval = setInterval(updateStatusBarWithUnpushedStatus, 60000); // Check every minute
 
-  // // Clean up the interval when deactivating
-  // context.subscriptions.push({
-  //   dispose: () => clearInterval(checkInterval),
-  // });
+  // Clean up the interval when deactivating
+  context.subscriptions.push({
+    dispose: () => clearInterval(checkInterval),
+  });
 
   // Initial check
   updateStatusBarWithUnpushedStatus();

@@ -334,12 +334,12 @@ export class RepositoryManager {
 
       // Create log message
       const logMessage = `Commit: ${headCommit}
-  Message: ${message}
-  Author: ${author}
-  Date: ${commitDate}
-  Branch: ${branch}
-  Repository: ${repoName}
-  Repository Path: ${repoPath}\n\n`;
+Message: ${message}
+Author: ${author}
+Date: ${commitDate}
+Branch: ${branch}
+Repository: ${repoName}
+Repository Path: ${repoPath}\n\n`;
 
       // Write to log file
       const trackingFilePath = path.join(this.logFilePath, this.logFile);
