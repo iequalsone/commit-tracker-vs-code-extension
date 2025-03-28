@@ -79,7 +79,9 @@ export class GitService {
   ): boolean {
     if (!this.terminalProvider) {
       if (this.logService) {
-        this.logService.error("Terminal provider not available");
+        this.logService.warn(
+          "Terminal provider not available, can't run script"
+        );
       }
       return false;
     }
