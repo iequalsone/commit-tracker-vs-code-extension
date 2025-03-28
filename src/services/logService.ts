@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-
+import { ILogService } from "./interfaces/ILogService";
 /**
  * Service for centralized logging
  */
-export class LogService implements vscode.Disposable {
+export class LogService implements ILogService, vscode.Disposable {
   private outputChannel: vscode.OutputChannel;
   private isLoggingEnabled: boolean;
 
