@@ -20,6 +20,10 @@ import { EventEmitter } from "events";
 import { CommandManager } from "../commands/commandManager";
 
 import { StatusManager } from "../status/statusManager";
+import {
+  ErrorHandlingService,
+  ErrorType,
+} from "../../services/errorHandlingService";
 
 /**
  * Repository status information
@@ -77,11 +81,13 @@ export class RepositoryManager extends EventEmitter {
   private repositories: Map<string, RepositoryStatus> = new Map();
   private statusManager: StatusManager | undefined;
   private commandManager: CommandManager | undefined;
+  private errorHandlingService: ErrorHandlingService;
 
   constructor(
     context: vscode.ExtensionContext,
     statusManager?: StatusManager,
-    commandManager?: CommandManager
+    commandManager?: CommandManager,
+    errorHandlingService?: ErrorHandlingService
   ) {
     super();
     this.context = context;
@@ -92,6 +98,18 @@ export class RepositoryManager extends EventEmitter {
       "lastProcessedCommit",
       null
     );
+
+    // Use provided error handling service or create a basic one
+    this.errorHandlingService =
+      errorHandlingService ||
+      ({
+        handleError: (error, operation, type) => {
+          const errorObj =
+            error instanceof Error ? error : new Error(String(error));
+          console.error(`[${type}] Error in ${operation}: ${errorObj.message}`);
+          this.emit(RepositoryEvent.ERROR, errorObj, operation);
+        },
+      } as ErrorHandlingService);
 
     // Load configuration
     const config = vscode.workspace.getConfiguration("commitTracker");
@@ -107,29 +125,69 @@ export class RepositoryManager extends EventEmitter {
     }
   }
 
-  // Add this after the class declaration, before any methods
   /**
-   * Centralized error handling for repository operations
+   * Enhanced centralized error handling for repository operations
+   * Maps different error types to appropriate handlers and notifications
+   *
    * @param error The error that occurred
    * @param operation Description of the operation that failed
    * @param errorType The specific type of error for targeted handling
+   * @param showNotification Whether to show a notification to the user
    */
   private handleError(
     error: unknown,
     operation: string,
-    errorType: RepositoryEvent = RepositoryEvent.ERROR
+    errorType: ErrorType = ErrorType.UNKNOWN,
+    showNotification: boolean = false
   ): void {
-    const errorObj = error instanceof Error ? error : new Error(String(error));
+    // Map repository events to error types
+    let suggestions: string[] = [];
 
-    // Log the error
-    logError(`Repository error during ${operation}: ${errorObj.message}`);
+    // Add suggestions based on error type
+    switch (errorType) {
+      case ErrorType.CONFIGURATION:
+        suggestions = ["Open Settings", "Run Setup Wizard"];
+        break;
+      case ErrorType.GIT_OPERATION:
+        suggestions = ["Check Git Installation", "Open Terminal"];
+        break;
+      case ErrorType.FILESYSTEM:
+        suggestions = ["Check Permissions", "Select New Location"];
+        break;
+      case ErrorType.REPOSITORY:
+        suggestions = ["Refresh Status"];
+        break;
+    }
+
+    // Use the error handling service
+    this.errorHandlingService.handleError(
+      error,
+      operation,
+      errorType,
+      showNotification,
+      suggestions
+    );
+
+    // Always emit legacy events for backward compatibility
+    const errorObj = error instanceof Error ? error : new Error(String(error));
 
     // Emit generic error event
     this.emit(RepositoryEvent.ERROR, errorObj, operation);
 
-    // Also emit specific error event if provided
-    if (errorType !== RepositoryEvent.ERROR) {
-      this.emit(errorType, errorObj, operation);
+    // Also emit specific error event based on type
+    switch (errorType) {
+      case ErrorType.CONFIGURATION:
+        this.emit(RepositoryEvent.ERROR_CONFIGURATION, errorObj);
+        break;
+      case ErrorType.GIT_OPERATION:
+        this.emit(RepositoryEvent.ERROR_GIT_OPERATION, errorObj);
+        break;
+      case ErrorType.FILESYSTEM:
+        this.emit(RepositoryEvent.ERROR_FILESYSTEM, errorObj);
+        break;
+      case ErrorType.REPOSITORY:
+        this.emit(RepositoryEvent.ERROR_REPOSITORY, errorObj);
+        break;
     }
   }
 
@@ -189,12 +247,11 @@ export class RepositoryManager extends EventEmitter {
         await pullChanges(this.logFilePath);
         logInfo("Successfully pulled latest changes from tracking repository");
       } catch (err) {
-        logError(`Failed to pull changes from tracking repository: ${err}`);
-        // Emit error but continue initialization
         this.handleError(
           err,
           "pulling changes from tracking repository",
-          RepositoryEvent.ERROR_GIT_OPERATION
+          ErrorType.GIT_OPERATION,
+          false
         );
       }
 
@@ -205,7 +262,8 @@ export class RepositoryManager extends EventEmitter {
         this.handleError(
           error,
           "initializing repository monitoring",
-          RepositoryEvent.ERROR_CONFIGURATION
+          ErrorType.CONFIGURATION,
+          true
         );
         return failure(error);
       }
@@ -250,7 +308,12 @@ export class RepositoryManager extends EventEmitter {
       this.emit(RepositoryEvent.TRACKING_STARTED, api.repositories.length);
       return success(true);
     } catch (error) {
-      this.handleError(error, "initializing repository manager");
+      this.handleError(
+        error,
+        "initializing repository manager",
+        ErrorType.UNKNOWN,
+        true
+      );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -366,7 +429,8 @@ Repository Path: ${commit.repoPath}\n\n`;
       this.handleError(
         error,
         `processing commit ${commitHash}`,
-        RepositoryEvent.ERROR_GIT_OPERATION
+        ErrorType.GIT_OPERATION,
+        false
       );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
@@ -456,7 +520,7 @@ Repository Path: ${repoPath}\n\n`;
       this.handleError(
         err,
         `logging commit details for ${headCommit}`,
-        RepositoryEvent.ERROR_FILESYSTEM
+        ErrorType.FILESYSTEM
       );
       return failure(err instanceof Error ? err : new Error(String(err)));
     }
@@ -479,11 +543,27 @@ Repository Path: ${repoPath}\n\n`;
     );
 
     if (!commitHash) {
-      throw new Error("Cannot process commit: No commit hash provided");
+      const error = new Error("Cannot process commit: No commit hash provided");
+      this.handleError(
+        error,
+        "processing commit directly",
+        ErrorType.REPOSITORY,
+        true
+      );
+      return failure(error);
     }
 
     if (!repoPath) {
-      throw new Error("Cannot process commit: No repository path provided");
+      const error = new Error(
+        "Cannot process commit: No repository path provided"
+      );
+      this.handleError(
+        error,
+        "processing commit directly",
+        ErrorType.REPOSITORY,
+        true
+      );
+      return failure(error);
     }
 
     try {
@@ -522,7 +602,12 @@ Repository Path: ${repoPath}\n\n`;
       logInfo(`Direct commit processing complete for ${commitHash}`);
       return success(commit);
     } catch (error) {
-      logError(`Failed to directly process commit ${commitHash}: ${error}`);
+      this.handleError(
+        error,
+        `directly processing commit ${commitHash}`,
+        ErrorType.GIT_OPERATION,
+        true
+      );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
