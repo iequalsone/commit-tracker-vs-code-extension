@@ -42,6 +42,29 @@ export class CommandManager implements vscode.Disposable {
         "push-requested",
         this.handlePushRequest.bind(this)
       );
+
+      this.repositoryManager.on(RepositoryEvent.ERROR, (error, operation) => {
+        this.logService.error(
+          `Repository error during ${operation}: ${error.message}`
+        );
+        // Only show notification for significant errors, not routine ones
+        if (
+          !operation.includes("already processed") &&
+          !operation.includes("Skipping")
+        ) {
+          vscode.window.showErrorMessage(`Error: ${error.message}`);
+        }
+      });
+
+      // Listen for specific error types to provide contextual UI feedback
+      this.repositoryManager.on(
+        RepositoryEvent.ERROR_GIT_OPERATION,
+        (error) => {
+          vscode.window.showErrorMessage(
+            `Git error: ${error.message}. You may need to fix Git issues manually.`
+          );
+        }
+      );
     }
   }
 
