@@ -160,8 +160,26 @@ export class ExtensionManager {
     this.statusManager.connectToRepositoryManager(this.repositoryManager);
 
     // Listen for repository errors in the extension manager
-    this.repositoryManager.on(RepositoryEvent.ERROR, (error) => {
-      this.logService.error(`Repository error: ${error}`);
+    this.repositoryManager.on(RepositoryEvent.ERROR, (error, operation) => {
+      this.logService.error(
+        `Repository error during ${operation}: ${error.message}`
+      );
+    });
+
+    // Listen for specific error types
+    this.repositoryManager.on(RepositoryEvent.ERROR_CONFIGURATION, (error) => {
+      this.logService.error(`Configuration error: ${error.message}`);
+      this.statusManager.setErrorStatus("Config Error");
+    });
+
+    this.repositoryManager.on(RepositoryEvent.ERROR_GIT_OPERATION, (error) => {
+      this.logService.error(`Git operation error: ${error.message}`);
+      this.statusManager.setErrorStatus("Git Error");
+    });
+
+    this.repositoryManager.on(RepositoryEvent.ERROR_FILESYSTEM, (error) => {
+      this.logService.error(`File system error: ${error.message}`);
+      this.statusManager.setErrorStatus("File Error");
     });
 
     // Listen for configuration updates
