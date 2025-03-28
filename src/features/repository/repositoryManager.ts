@@ -16,7 +16,7 @@ import {
 import { logInfo, logError } from "../../utils/logger";
 import { debounce } from "../../utils/debounce";
 import { DisposableManager } from "../../utils/DisposableManager";
-import { Result, success, failure } from "../../utils/result";
+import { Result, success, failure } from "../../utils/results";
 import { EventEmitter } from "events";
 import { CommandManager } from "../commands/commandManager";
 
@@ -25,6 +25,7 @@ import {
   ErrorHandlingService,
   ErrorType,
 } from "../../services/errorHandlingService";
+import { ILogService } from "../../services/interfaces/ILogService";
 
 /**
  * Repository status information
@@ -103,6 +104,7 @@ export class RepositoryManager extends EventEmitter {
   private commandManager: CommandManager | undefined;
   private errorHandlingService: ErrorHandlingService;
   private gitService: GitService | undefined;
+  private logService?: ILogService;
 
   private cache: {
     repositoryStatus: Map<
@@ -154,18 +156,25 @@ export class RepositoryManager extends EventEmitter {
     statusManager?: StatusManager,
     commandManager?: CommandManager,
     errorHandlingService?: ErrorHandlingService,
-    gitService?: GitService
+    gitService?: GitService,
+    logService?: ILogService
   ) {
     super();
     this.context = context;
     this.statusManager = statusManager;
     this.commandManager = commandManager;
     this.gitService = gitService;
+    this.logService = logService;
     this.disposableManager = DisposableManager.getInstance();
     this.lastProcessedCommit = context.globalState.get(
       "lastProcessedCommit",
       null
     );
+
+    // Use logService if available
+    if (this.logService) {
+      this.logService.info("RepositoryManager initialized");
+    }
 
     // Initialize cache
     this.cache = {
@@ -257,6 +266,11 @@ export class RepositoryManager extends EventEmitter {
   ): void {
     // Map repository events to error types
     let suggestions: string[] = [];
+
+    // Use logging service if available
+    if (this.logService) {
+      this.logService.error(`Error during ${operation}`, error);
+    }
 
     // Add suggestions based on error type
     switch (errorType) {
