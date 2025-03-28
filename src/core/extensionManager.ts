@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { SetupManager } from "../features/setup/setupManager";
 import { StatusManager } from "../features/status/statusManager";
 import { CommandManager } from "../features/commands/commandManager";
-import { GitService, TerminalProvider } from "../services/gitService";
+import { GitService } from "../services/gitService";
 import { LogService } from "../services/logService";
 import {
   RepositoryEvent,
@@ -13,6 +13,11 @@ import {
   ErrorHandlingService,
   ErrorType,
 } from "../services/errorHandlingService";
+
+import { ITerminalProvider } from "../services/interfaces/ITerminalProvider";
+import { ILogService } from "../services/interfaces/ILogService";
+import { IWorkspaceProvider } from "../services/interfaces/IWorkspaceProvider";
+import { IFileSystemService } from "../services/interfaces/IFileSystemService";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -104,8 +109,19 @@ export class ExtensionManager {
     // Initialize services first
     this.logService = new LogService();
 
+    // Create workspace provider
+    const workspaceProvider: IWorkspaceProvider = {
+      getWorkspaceRoot: () => {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+          return null;
+        }
+        return workspaceFolders[0].uri.fsPath;
+      },
+    };
+
     // Create terminal provider
-    const terminalProvider: TerminalProvider = {
+    const terminalProvider: ITerminalProvider = {
       createTerminal: (options) => {
         const terminal = vscode.window.createTerminal(options);
         return {
@@ -116,8 +132,25 @@ export class ExtensionManager {
       },
     };
 
-    // Initialize with both logService and terminalProvider
-    this.gitService = new GitService(this.logService, terminalProvider);
+    // Create file system service
+    const fileSystemService: IFileSystemService = {
+      writeFile: (path, content, options) => {
+        const fs = require("fs");
+        fs.writeFileSync(path, content, options);
+      },
+      exists: (path) => {
+        const fs = require("fs");
+        return fs.existsSync(path);
+      },
+    };
+
+    // Initialize with all dependencies
+    this.gitService = new GitService({
+      logService: this.logService,
+      terminalProvider,
+      workspaceProvider,
+      fileSystemService,
+    });
 
     // Add a workspace provider
     this.gitService.setWorkspaceProvider(() => {
