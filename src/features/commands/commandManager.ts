@@ -3,13 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { GitService } from "../../services/gitService";
-import { LogService } from "../../services/logService";
 import { SetupManager } from "../setup/setupManager";
 import { StatusManager } from "../status/statusManager";
 import {
   RepositoryEvent,
   RepositoryManager,
 } from "../repository/repositoryManager";
+import { ILogService } from "../../services/interfaces/ILogService";
 
 /**
  * Manages all extension commands and their registration
@@ -17,7 +17,7 @@ import {
 export class CommandManager implements vscode.Disposable {
   private readonly context: vscode.ExtensionContext;
   private readonly gitService: GitService;
-  private readonly logService: LogService;
+  private readonly logService: ILogService;
   private readonly setupManager: SetupManager;
   private readonly statusManager: StatusManager;
   private readonly repositoryManager: RepositoryManager;
@@ -26,7 +26,7 @@ export class CommandManager implements vscode.Disposable {
   constructor(
     context: vscode.ExtensionContext,
     gitService: GitService,
-    logService: LogService,
+    logService: ILogService,
     setupManager: SetupManager,
     statusManager: StatusManager,
     repositoryManager: RepositoryManager
