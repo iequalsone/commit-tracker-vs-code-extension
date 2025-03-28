@@ -481,28 +481,48 @@ Repository Path: ${repoPath}\n\n`;
       logInfo(`Writing log to: ${trackingFilePath}`);
 
       if (!validatePath(trackingFilePath)) {
-        return failure(new Error("Invalid tracking file path."));
+        const error = new Error("Invalid tracking file path");
+        this.handleError(
+          error,
+          "validating tracking file path",
+          ErrorType.FILESYSTEM
+        );
+        return failure(error);
       }
 
       try {
         ensureDirectoryExists(path.dirname(trackingFilePath));
+        logInfo(`Ensured directory exists: ${this.logFilePath}`);
       } catch (err) {
-        return failure(new Error(`Failed to ensure directory exists: ${err}`));
+        this.handleError(
+          err,
+          "ensuring directory exists",
+          ErrorType.FILESYSTEM
+        );
+        return failure(err instanceof Error ? err : new Error(String(err)));
       }
 
       try {
         await appendToFile(trackingFilePath, logMessage);
         logInfo(`Successfully logged commit details to ${this.logFile}`);
       } catch (err) {
-        return failure(new Error(`Failed to write to ${this.logFile}: ${err}`));
+        this.handleError(
+          err,
+          `writing to ${this.logFile}`,
+          ErrorType.FILESYSTEM
+        );
+        return failure(err instanceof Error ? err : new Error(String(err)));
       }
 
-      // Emit event for commit processed with info needed for potential push
+      // Emit commit processed event with info needed for potential push
       const commitInfo = {
-        logFilePath: this.logFilePath,
-        trackingFilePath,
+        hash: headCommit,
+        message,
+        author,
+        date: commitDate,
+        branch,
         repoName,
-        commitHash: headCommit,
+        repoPath,
       };
 
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commitInfo, trackingFilePath);
@@ -577,6 +597,7 @@ Repository Path: ${repoPath}\n\n`;
         repoName = await getRepoNameFromRemote(repoPath);
       } catch (error) {
         repoName = path.basename(repoPath);
+        logInfo(`Using directory name as repo name: ${repoName}`);
       }
 
       const commit: Commit = {
@@ -598,6 +619,9 @@ Repository Path: ${repoPath}\n\n`;
       // Update the last processed commit
       this.lastProcessedCommit = commitHash;
       await this.context.globalState.update("lastProcessedCommit", commitHash);
+
+      // Emit commit processed event instead of showing UI
+      this.emit(RepositoryEvent.COMMIT_PROCESSED, commit);
 
       logInfo(`Direct commit processing complete for ${commitHash}`);
       return success(commit);
