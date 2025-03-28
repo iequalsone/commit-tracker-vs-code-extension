@@ -81,9 +81,11 @@ export class StatusManager implements vscode.Disposable {
     );
 
     repositoryManager.on(RepositoryEvent.ERROR, (error) => {
-      this.setErrorStatus(
-        error instanceof Error ? error.message : String(error)
-      );
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.setErrorStatus(errorMessage.substring(0, 20) + "...");
+      // Reset status after a timeout
+      setTimeout(() => this.setTrackingStatus(), 5000);
     });
 
     repositoryManager.on(
@@ -95,13 +97,7 @@ export class StatusManager implements vscode.Disposable {
 
     this.logService.info("Successfully connected to RepositoryManager events");
 
-    // Connect to error events
-    repositoryManager.on(RepositoryEvent.ERROR, (error) => {
-      this.setErrorStatus(error.message.substring(0, 20) + "...");
-      // Reset status after a timeout
-      setTimeout(() => this.setTrackingStatus(), 5000);
-    });
-
+    // Connect to specific error events
     repositoryManager.on(RepositoryEvent.ERROR_GIT_OPERATION, () => {
       this.setErrorStatus("Git Error");
       setTimeout(() => this.setTrackingStatus(), 5000);
@@ -120,6 +116,18 @@ export class StatusManager implements vscode.Disposable {
       this.setErrorStatus("Repo Error");
       setTimeout(() => this.setTrackingStatus(), 5000);
     });
+  }
+
+  /**
+   * Updates the status bar to indicate unpushed commits
+   * @param hasUnpushed Whether there are unpushed commits
+   */
+  public updateUnpushedIndicator(hasUnpushed: boolean): void {
+    if (hasUnpushed) {
+      this.showUnpushedCommitsStatus();
+    } else {
+      this.showNormalStatus();
+    }
   }
 
   /**
@@ -463,5 +471,17 @@ export class StatusManager implements vscode.Disposable {
 
     // Reset to normal status after a delay
     setTimeout(() => this.updateStatus(), 5000);
+  }
+
+  /**
+   * Sets the status bar with custom text and tooltip
+   * @param text The text to display in the status bar
+   * @param tooltip The tooltip text
+   */
+  public setStatus(text: string, tooltip: string): void {
+    this.statusBarItem.text = text;
+    this.statusBarItem.tooltip = tooltip;
+    this.statusBarItem.backgroundColor = undefined;
+    this.statusBarItem.show();
   }
 }
