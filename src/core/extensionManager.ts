@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { SetupManager } from "../features/setup/setupManager";
 import { StatusManager } from "../features/status/statusManager";
 import { CommandManager } from "../features/commands/commandManager";
-import { GitService } from "../services/gitService";
+import { GitService, TerminalProvider } from "../services/gitService";
 import { LogService } from "../services/logService";
 import {
   RepositoryEvent,
@@ -103,7 +103,21 @@ export class ExtensionManager {
   private async initializeExtension(): Promise<void> {
     // Initialize services first
     this.logService = new LogService();
-    this.gitService = new GitService();
+
+    // Create terminal provider
+    const terminalProvider: TerminalProvider = {
+      createTerminal: (options) => {
+        const terminal = vscode.window.createTerminal(options);
+        return {
+          show: terminal.show.bind(terminal),
+          sendText: terminal.sendText.bind(terminal),
+          dispose: terminal.dispose.bind(terminal),
+        };
+      },
+    };
+
+    // Initialize with both logService and terminalProvider
+    this.gitService = new GitService(this.logService, terminalProvider);
 
     // Initialize StatusManager first
     this.statusManager = new StatusManager(
