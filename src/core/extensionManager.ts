@@ -55,8 +55,9 @@ export class ExtensionManager {
     this.repositoryManager = new RepositoryManager(
       context,
       this.statusManager,
-      undefined, // CommandManager will be connected later
-      this.errorHandlingService
+      undefined,
+      this.errorHandlingService,
+      this.gitService
     );
     this.commandManager = new CommandManager(
       context,
