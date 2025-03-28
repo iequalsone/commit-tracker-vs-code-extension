@@ -1,10 +1,12 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { execSync } from "child_process";
-import { exec } from "child_process";
+import { exec, execSync } from "child_process";
+import { ITerminalProvider, ITerminal } from "./interfaces/ITerminalProvider";
+import { ILogService } from "./interfaces/ILogService";
+import { IWorkspaceProvider } from "./interfaces/IWorkspaceProvider";
+import { IFileSystemService } from "./interfaces/IFileSystemService";
 import { promisify } from "util";
-import { logError, logInfo } from "../utils/logger";
 
 // Cache interface for storing git operation results
 interface GitCache {
@@ -15,20 +17,18 @@ interface GitCache {
 }
 
 /**
- * Interface for terminal operations - allows GitService to remain UI-independent
+ * Default implementation of IFileSystemService using Node.js fs module
  */
-export interface TerminalProvider {
-  createTerminal(options: {
-    name: string;
-    cwd?: string;
-    shellPath?: string;
-    shellArgs?: string[];
-    hideFromUser?: boolean;
-  }): {
-    show(preserveFocus?: boolean): void;
-    sendText(text: string, addNewLine?: boolean): void;
-    dispose(): void;
-  };
+class DefaultFileSystemService implements IFileSystemService {
+  private fs = require("fs");
+
+  writeFile(path: string, content: string, options?: { mode?: number }): void {
+    this.fs.writeFileSync(path, content, options);
+  }
+
+  exists(path: string): boolean {
+    return this.fs.existsSync(path);
+  }
 }
 
 /**
@@ -38,26 +38,31 @@ export class GitService {
   // Cache storage with a default 5-minute TTL
   private cache: GitCache = {};
   private readonly DEFAULT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-  private logService: any; // Will be properly typed when injected
-  private terminalProvider?: TerminalProvider;
+
+  private readonly logService?: ILogService;
+  private readonly terminalProvider?: ITerminalProvider;
+  private readonly workspaceProvider?: IWorkspaceProvider;
+  private readonly fileSystemService: IFileSystemService;
+
+  private readonly execAsync = promisify(exec);
+
   private _getWorkspaceRoot: (() => string | null) | null = null;
 
   /**
-   * Create a new GitService instance
-   * @param logService Optional log service for logging operations
-   * @param terminalProvider Optional terminal provider for UI operations
+   * Create a new GitService instance with all dependencies injectable
+   * @param options Optional dependencies for the service
    */
-  constructor(logService?: any, terminalProvider?: TerminalProvider) {
-    this.logService = logService;
-    this.terminalProvider = terminalProvider;
-  }
-
-  /**
-   * Set the terminal provider after construction
-   * @param terminalProvider The terminal provider to use
-   */
-  public setTerminalProvider(terminalProvider: TerminalProvider): void {
-    this.terminalProvider = terminalProvider;
+  constructor(options?: {
+    logService?: ILogService;
+    terminalProvider?: ITerminalProvider;
+    workspaceProvider?: IWorkspaceProvider;
+    fileSystemService?: IFileSystemService;
+  }) {
+    this.logService = options?.logService;
+    this.terminalProvider = options?.terminalProvider;
+    this.workspaceProvider = options?.workspaceProvider;
+    this.fileSystemService =
+      options?.fileSystemService || new DefaultFileSystemService();
   }
 
   /**
@@ -74,9 +79,7 @@ export class GitService {
   ): boolean {
     if (!this.terminalProvider) {
       if (this.logService) {
-        this.logService.warn(
-          "Terminal provider not set, cannot run script in terminal"
-        );
+        this.logService.error("Terminal provider not available");
       }
       return false;
     }
@@ -91,10 +94,13 @@ export class GitService {
       terminal.show();
       terminal.sendText(`bash "${scriptPath}" && exit || exit`);
 
+      if (this.logService) {
+        this.logService.info(`Running script in terminal: ${scriptPath}`);
+      }
       return true;
     } catch (error) {
       if (this.logService) {
-        this.logService.error(`Error running script in terminal: ${error}`);
+        this.logService.error("Failed to run script in terminal", error);
       }
       return false;
     }
@@ -112,14 +118,6 @@ export class GitService {
   }
 
   /**
-   * Set the log service after construction
-   * @param logService The log service to use
-   */
-  public setLogService(logService: any): void {
-    this.logService = logService;
-  }
-
-  /**
    * Gets the current branch name
    * @param workspaceRoot Optional workspace root path
    * @returns The current branch name or null if not in a git repository
@@ -128,32 +126,35 @@ export class GitService {
     workspaceRoot?: string
   ): Promise<string | null> {
     try {
-      const path = workspaceRoot || this.getWorkspaceRoot();
-      if (!path) {
+      const root = workspaceRoot || this.getWorkspaceRoot();
+      if (!root) {
+        if (this.logService) {
+          this.logService.warn(
+            "No workspace root available for git operations"
+          );
+        }
         return null;
       }
 
-      // Generate cache key
-      const cacheKey = `branch:${path}`;
-
-      // Try to get from cache
-      const cachedValue = this.getFromCache(cacheKey);
-      if (cachedValue !== null) {
-        return cachedValue;
+      // Use cache if available
+      const cacheKey = `branch:${root}`;
+      const cachedBranch = this.getFromCache(cacheKey, 5000); // Short TTL for branch
+      if (cachedBranch) {
+        return cachedBranch;
       }
 
-      const branchName = execSync("git symbolic-ref --short HEAD", {
-        cwd: path,
-      })
-        .toString()
-        .trim();
+      const branch = await this.executeGitCommand(
+        root,
+        "rev-parse --abbrev-ref HEAD"
+      );
 
-      // Store in cache
-      this.setInCache(cacheKey, branchName);
-
-      return branchName;
+      // Cache the result
+      this.setInCache(cacheKey, branch, 5000);
+      return branch;
     } catch (error) {
-      // Not in a git repository or git command failed
+      if (this.logService) {
+        this.logService.error("Failed to get current branch", error);
+      }
       return null;
     }
   }
@@ -469,7 +470,9 @@ echo "Terminal will close in 3 seconds..."
 sleep 3
 `;
 
-    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+    this.fileSystemService.writeFile(scriptPath, scriptContent, {
+      mode: 0o755,
+    });
     return scriptPath;
   }
 
@@ -478,12 +481,12 @@ sleep 3
    * @returns The workspace path or null if no workspace is open
    */
   private getWorkspaceRoot(): string | null {
-    if (this._getWorkspaceRoot) {
-      return this._getWorkspaceRoot();
+    if (this.workspaceProvider) {
+      return this.workspaceProvider.getWorkspaceRoot();
     }
 
     if (this.logService) {
-      this.logService.warn("No workspace provider set for GitService");
+      this.logService.warn("Workspace provider not available");
     }
     return null;
   }
@@ -572,29 +575,14 @@ sleep 3
     }
 
     try {
-      // Generate a cache key for this command
-      const cacheKey = `cmd:${repoPath}:${command}`;
-
-      // Only cache read operations (get, show, status, etc.)
-      // Don't cache write operations (push, pull, commit, etc.)
-      const isReadOperation =
-        !command.includes("push") &&
-        !command.includes("pull") &&
-        !command.includes("commit") &&
-        !command.includes("add") &&
-        !command.includes("checkout") &&
-        !command.includes("merge");
-
-      // Try to get from cache for read operations
-      if (isReadOperation) {
-        const cachedValue = this.getFromCache(cacheKey);
-        if (cachedValue !== null) {
-          return cachedValue;
-        }
+      if (this.logService) {
+        this.logService.info(
+          `Executing git command in ${repoPath}: ${command} (timeout: ${timeout}ms)`
+        );
       }
 
       // Check that the path exists
-      if (!fs.existsSync(repoPath)) {
+      if (!this.fileSystemService.exists(repoPath)) {
         throw new Error(`Repository path does not exist: ${repoPath}`);
       }
 
@@ -606,25 +594,18 @@ sleep 3
       env.GIT_TERMINAL_PROMPT = "0";
 
       // Execute the command with the specified timeout and custom environment
-      const { stdout, stderr } = await new Promise<{
-        stdout: string;
-        stderr: string;
-      }>((resolve, reject) => {
-        const childProcess = execSync(`git -C "${repoPath}" ${command}`, {
+      const { stdout, stderr } = await this.execAsync(
+        `git -C "${repoPath}" ${command}`,
+        {
           timeout,
           env,
-          encoding: "utf8",
-        });
+        }
+      );
 
-        resolve({ stdout: childProcess.toString(), stderr: "" });
-      });
-
-      // Cache the result for read operations
-      if (isReadOperation) {
-        this.setInCache(cacheKey, stdout.trim());
-      } else {
-        // For write operations, invalidate any cache for this repo
-        this.invalidateCache(repoPath);
+      if (stderr && !stderr.includes("Warning")) {
+        if (this.logService) {
+          this.logService.info(`Git command produced stderr: ${stderr}`);
+        }
       }
 
       return stdout.trim();
@@ -632,13 +613,21 @@ sleep 3
       if (error instanceof Error) {
         // Add more detailed logging for timeouts
         if (error.message.includes("timed out")) {
-          throw new Error(
-            `Git command timed out after ${timeout}ms: ${command} in ${repoPath}`
-          );
+          if (this.logService) {
+            this.logService.error(
+              `Git command timed out after ${timeout}ms: ${command} in ${repoPath}`
+            );
+          }
         }
-        throw error;
+
+        if (this.logService) {
+          this.logService.error(
+            `Git command failed in ${repoPath} with command: ${command}`
+          );
+          this.logService.error(`Error message: ${error.message}`);
+        }
       }
-      throw new Error(`Unknown error executing git command: ${command}`);
+      throw error;
     }
   }
 
