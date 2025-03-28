@@ -113,6 +113,13 @@ export class ExtensionManager {
     );
     this.statusManager.initialize();
 
+    // Initialize SetupManager with GitService
+    this.setupManager = new SetupManager(
+      this.context,
+      this.logService,
+      this.gitService
+    );
+
     // Initialize RepositoryManager with StatusManager
     this.repositoryManager = new RepositoryManager(
       this.context,
@@ -121,6 +128,9 @@ export class ExtensionManager {
 
     // Connect GitService to RepositoryManager
     this.repositoryManager.connectGitService(this.gitService);
+
+    // Connect RepositoryManager to SetupManager
+    this.setupManager.connectRepositoryManager(this.repositoryManager);
 
     // Command manager initialization needs repositoryManager
     this.commandManager = new CommandManager(
@@ -139,23 +149,20 @@ export class ExtensionManager {
     this.commandManager.setupRepositoryEventListeners();
     this.repositoryManager.connectCommandManager(this.commandManager);
 
-    // Initialize repository manager
-    const repoInitResult = await this.repositoryManager.initialize();
+    // Initialize repository manager after setup check
+    const isConfigured = this.setupManager.validateConfiguration();
 
-    // Connect repositoryManager to commandManager (two-way reference)
-    this.repositoryManager.connectCommandManager(this.commandManager);
+    // Only initialize the repository manager if configuration is valid
+    if (isConfigured) {
+      const repoInitResult = await this.repositoryManager.initialize();
 
-    if (repoInitResult.isFailure()) {
-      this.statusManager.setErrorStatus(
-        "Failed to initialize repository tracking"
-      );
-    }
-
-    // Step 1: Run setup/config validation
-    const isConfigured = await this.runSetup();
-    if (!isConfigured) {
-      this.logService.info("Extension setup canceled or failed");
-      return;
+      if (repoInitResult.isFailure()) {
+        this.statusManager.setErrorStatus(
+          "Failed to initialize repository tracking"
+        );
+      }
+    } else {
+      this.statusManager.setSetupNeededStatus();
     }
 
     // Step 2: Register commands
