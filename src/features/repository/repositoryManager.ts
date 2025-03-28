@@ -542,7 +542,7 @@ Repository Path: ${commit.repoPath}\n\n`;
    * @param repoPath Repository path
    * @param headCommit Commit hash
    * @param branch Branch name
-   * @returns Result indicating success or failure
+   * @returns Result indicating success or failure with the tracking file path
    */
   private async logCommitDetails(
     repoPath: string,
@@ -550,22 +550,27 @@ Repository Path: ${commit.repoPath}\n\n`;
     branch: string
   ): Promise<Result<string, Error>> {
     try {
-      logInfo(
-        `Logging commit details for ${headCommit} in ${repoPath} on branch ${branch}`
-      );
+      if (!this.gitService) {
+        return failure(new Error("GitService not available"));
+      }
 
       // Get commit details
-      const message = await getCommitMessage(repoPath, headCommit);
+      const message = await this.gitService.getCommitMessage(
+        repoPath,
+        headCommit
+      );
       const commitDate = new Date().toISOString();
-      const author = await getCommitAuthorDetails(repoPath, headCommit);
+      const author = await this.gitService.getCommitAuthorDetails(
+        repoPath,
+        headCommit
+      );
 
       // Get repository name
       let repoName;
       try {
-        repoName = await getRepoNameFromRemote(repoPath);
+        repoName = await this.gitService.getRepoNameFromRemote(repoPath);
       } catch (error) {
         repoName = path.basename(repoPath);
-        logInfo(`Using directory name as repo name: ${repoName}`);
       }
 
       // Create log message
@@ -579,71 +584,33 @@ Repository Path: ${repoPath}\n\n`;
 
       // Write to log file
       const trackingFilePath = path.join(this.logFilePath, this.logFile);
-      logInfo(`Writing log to: ${trackingFilePath}`);
-
-      if (!validatePath(trackingFilePath)) {
-        const error = new Error("Invalid tracking file path.");
-        this.handleError(error, "validating path", ErrorType.FILESYSTEM, false);
-        return failure(error);
-      }
 
       try {
-        ensureDirectoryExists(path.dirname(trackingFilePath));
-        logInfo(`Ensured directory exists: ${this.logFilePath}`);
-      } catch (err) {
-        this.handleError(
-          err,
-          "ensuring directory exists",
-          ErrorType.FILESYSTEM,
-          true
+        // Ensure the directory exists
+        const fs = require("fs");
+        const path = require("path");
+        const dirPath = path.dirname(trackingFilePath);
+
+        if (!fs.existsSync(dirPath)) {
+          fs.mkdirSync(dirPath, { recursive: true });
+        }
+
+        // Append to the file
+        fs.appendFileSync(trackingFilePath, logMessage);
+
+        // Request a push via event emission (no direct UI)
+        this.emit(
+          RepositoryEvent.PUSH_REQUESTED,
+          this.logFilePath,
+          trackingFilePath
         );
-        return failure(err instanceof Error ? err : new Error(String(err)));
+
+        return success(trackingFilePath);
+      } catch (error) {
+        return failure(new Error(`Failed to write to log file: ${error}`));
       }
-
-      try {
-        await appendToFile(trackingFilePath, logMessage);
-        logInfo(`Successfully logged commit details to ${this.logFile}`);
-      } catch (err) {
-        this.handleError(
-          err,
-          "writing to log file",
-          ErrorType.FILESYSTEM,
-          true
-        );
-        return failure(err instanceof Error ? err : new Error(String(err)));
-      }
-
-      // Create commit info object for event
-      const commitInfo = {
-        hash: headCommit,
-        message,
-        author,
-        date: commitDate,
-        branch,
-        repoName,
-        repoPath,
-      };
-
-      // Emit commit processed event
-      this.emit(RepositoryEvent.COMMIT_PROCESSED, commitInfo, trackingFilePath);
-
-      // Emit push requested event for CommandManager to handle
-      this.emit(
-        RepositoryEvent.PUSH_REQUESTED,
-        this.logFilePath,
-        trackingFilePath
-      );
-
-      logInfo("Commit logging complete");
-      return success(trackingFilePath);
-    } catch (err) {
-      this.handleError(
-        err,
-        "logging commit details",
-        ErrorType.FILESYSTEM,
-        true
-      );
-      return failure(err instanceof Error ? err : new Error(String(err)));
+    } catch (error) {
+      return failure(new Error(`Failed to log commit details: ${error}`));
     }
   }
 
@@ -664,76 +631,66 @@ Repository Path: ${repoPath}\n\n`;
     );
 
     if (!commitHash) {
-      const error = new Error("Cannot process commit: No commit hash provided");
-      this.handleError(
-        error,
-        "processing commit directly",
-        ErrorType.REPOSITORY,
-        true
-      );
-      return failure(error);
+      return failure(new Error("No commit hash provided"));
     }
 
     if (!repoPath) {
-      const error = new Error(
-        "Cannot process commit: No repository path provided"
-      );
-      this.handleError(
-        error,
-        "processing commit directly",
-        ErrorType.REPOSITORY,
-        true
-      );
-      return failure(error);
+      return failure(new Error("No repository path provided"));
     }
 
     try {
-      // Get commit details
-      const message = await getCommitMessage(repoPath, commitHash);
-      const author = await getCommitAuthorDetails(repoPath, commitHash);
-      const date = new Date().toISOString();
-
-      let repoName;
-      try {
-        repoName = await getRepoNameFromRemote(repoPath);
-      } catch (error) {
-        repoName = path.basename(repoPath);
-        logInfo(`Using directory name as repo name: ${repoName}`);
+      if (!this.gitService) {
+        return failure(new Error("GitService not available"));
       }
 
+      // Get commit details using the GitService
+      const message = await this.gitService.getCommitMessage(
+        repoPath,
+        commitHash
+      );
+      const author = await this.gitService.getCommitAuthorDetails(
+        repoPath,
+        commitHash
+      );
+      const commitDate = new Date().toISOString();
+      const repoName = await this.gitService.getRepoNameFromRemote(repoPath);
+
+      // Create the commit object
       const commit: Commit = {
         hash: commitHash,
         message,
         author,
-        date,
+        date: commitDate,
         branch,
         repoName,
         repoPath,
       };
 
-      // Log the commit details
+      // Log the commit details using the internal method
       const result = await this.logCommitDetails(repoPath, commitHash, branch);
       if (result.isFailure()) {
         return failure(result.error);
       }
 
-      // Update the last processed commit
+      // Update last processed commit in global state
       this.lastProcessedCommit = commitHash;
       await this.context.globalState.update("lastProcessedCommit", commitHash);
 
-      // Emit commit processed event instead of showing UI
-      this.emit(RepositoryEvent.COMMIT_PROCESSED, commit);
+      // Emit that a commit was processed
+      this.emit(RepositoryEvent.COMMIT_PROCESSED, commit, result.value);
 
-      logInfo(`Direct commit processing complete for ${commitHash}`);
       return success(commit);
     } catch (error) {
+      const errorObj =
+        error instanceof Error ? error : new Error(String(error));
       this.handleError(
-        error,
-        `directly processing commit ${commitHash}`,
-        ErrorType.GIT_OPERATION,
+        errorObj,
+        `Failed to directly process commit ${commitHash}`,
+        ErrorType.REPOSITORY,
         true
       );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      this.emit(RepositoryEvent.COMMIT_FAILED, repoPath, commitHash, errorObj);
+      return failure(errorObj);
     }
   }
 
@@ -1655,34 +1612,33 @@ Repository Path: ${repoPath}\n\n`;
    */
   public async checkUnpushedCommits(): Promise<Result<boolean, Error>> {
     try {
-      if (!this.logFilePath) {
-        const error = new Error("Log file path is not configured");
-        this.handleError(
-          error,
-          "checking unpushed commits",
-          ErrorType.CONFIGURATION,
-          false
-        );
-        return failure(error);
+      if (!this.gitService) {
+        return failure(new Error("GitService not available"));
       }
 
-      // Use gitService to check for unpushed commits
-      const hasUnpushed = await this.gitService?.hasUnpushedCommits(
+      // Use the GitService abstraction
+      const hasUnpushed = await this.gitService.hasUnpushedCommits(
         this.logFilePath
       );
 
-      // Emit event with unpushed status
+      // Update cache
+      this.cache.unpushedCommits = {
+        data: {
+          count: hasUnpushed ? 1 : 0,
+          commitHashes: [],
+          needsPush: hasUnpushed,
+        },
+        timestamp: Date.now() + this.CACHE_TTL.UNPUSHED_COMMITS,
+      };
+
+      // Emit event for the UI to pick up
       this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, hasUnpushed);
 
       return success(hasUnpushed);
     } catch (error) {
-      this.handleError(
-        error,
-        "checking unpushed commits",
-        ErrorType.GIT_OPERATION,
-        true
-      );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      // If error, assume there might be unpushed commits to be safe
+      this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, true);
+      return failure(new Error(`Failed to check unpushed commits: ${error}`));
     }
   }
 
@@ -1692,6 +1648,8 @@ Repository Path: ${repoPath}\n\n`;
    */
   public connectGitService(gitService: GitService): void {
     this.gitService = gitService;
+    // Invalidate cache when connecting a new service
+    this.invalidateCache();
   }
 
   /**
