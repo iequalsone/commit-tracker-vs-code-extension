@@ -4,8 +4,10 @@ import { LogService } from "../../services/logService";
 import {
   RepositoryManager,
   RepositoryEvent,
+  StatusUpdate,
 } from "../repository/repositoryManager";
 import path from "path";
+import { IStatusManager } from "./statusManagerInterface";
 
 /**
  * Manages the status bar item and displays current tracking state
@@ -49,6 +51,39 @@ export class StatusManager implements vscode.Disposable {
   ): void {
     this.logService.info(
       "Connecting StatusManager to RepositoryManager events"
+    );
+
+    // Add this new event listener
+    repositoryManager.on(
+      RepositoryEvent.STATUS_UPDATE,
+      (update: StatusUpdate) => {
+        switch (update.type) {
+          case "normal":
+            this.setTrackingStatus();
+            break;
+          case "error":
+            this.setErrorStatus(update.message);
+            setTimeout(() => this.setTrackingStatus(), 5000);
+            break;
+          case "warning":
+            this.showTemporaryMessage(
+              update.message,
+              "warning",
+              update.duration || 3000
+            );
+            break;
+          case "info":
+            this.showTemporaryMessage(
+              update.message,
+              "info",
+              update.duration || 3000
+            );
+            break;
+          case "processing":
+            this.setProcessingStatus(update.message);
+            break;
+        }
+      }
     );
 
     repositoryManager.on(RepositoryEvent.TRACKING_STARTED, () => {
@@ -308,6 +343,13 @@ export class StatusManager implements vscode.Disposable {
    */
   public setTrackingStatus(): void {
     this.showNormalStatus();
+  }
+
+  /**
+   * Sets the status bar to show stopped tracking status
+   */
+  public setStoppedStatus(): void {
+    this.setStatus("$(circle-slash) CT: Stopped", "Commit tracking stopped");
   }
 
   /**
