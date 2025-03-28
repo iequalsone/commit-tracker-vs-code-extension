@@ -176,6 +176,10 @@ sleep 5
 
     // Repository/tracking related commands
     this.registerCommand(
+      "commitTracker.showRepositoryStatus",
+      this.showRepositoryStatus.bind(this)
+    );
+    this.registerCommand(
       "commitTracker.logCurrentCommit",
       this.logCurrentCommit.bind(this)
     );
@@ -778,6 +782,54 @@ sleep 5
     } else {
       vscode.window.showInformationMessage("Commit Tracker: Logging disabled");
       this.statusManager.updateLoggingStatus(false);
+    }
+  }
+
+  /**
+   * Command handler: Show repository status
+   */
+  private async showRepositoryStatus(): Promise<void> {
+    try {
+      if (!this.repositoryManager) {
+        vscode.window.showErrorMessage(
+          "Repository manager is not initialized."
+        );
+        return;
+      }
+
+      const statusResult = this.repositoryManager.getRepositorySummary();
+      if (statusResult.isFailure()) {
+        vscode.window.showErrorMessage(
+          `Failed to get repository status: ${statusResult.error.message}`
+        );
+        return;
+      }
+
+      const status = statusResult.value;
+
+      const details = [
+        `Total repositories: ${status.totalRepositories}`,
+        `Tracked repositories: ${status.trackedRepositories}`,
+        `Repositories with changes: ${status.repositoriesWithChanges}`,
+      ];
+
+      if (status.activeRepository) {
+        details.push(`Active repository: ${status.activeRepository}`);
+      }
+
+      vscode.window.showInformationMessage("Repository Status", ...details);
+
+      // Update the status bar with a temporary message
+      this.statusManager.showTemporaryMessage(
+        `${status.trackedRepositories} repos tracked`,
+        "repo",
+        5000
+      );
+    } catch (error) {
+      this.logService.error("Error showing repository status", error);
+      vscode.window.showErrorMessage(
+        `Failed to show repository status: ${error}`
+      );
     }
   }
 
