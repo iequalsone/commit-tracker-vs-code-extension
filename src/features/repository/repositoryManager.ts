@@ -87,6 +87,7 @@ export enum RepositoryEvent {
   TERMINAL_OPERATION_REQUESTED = "terminal-operation-requested",
   SETUP_REQUESTED = "setup-requested",
   REPOSITORY_INFO_REQUESTED = "repository-info-requested",
+  REPOSITORY_INITIALIZED = "repository-initialized",
 }
 
 export class RepositoryManager extends EventEmitter {
@@ -420,6 +421,10 @@ export class RepositoryManager extends EventEmitter {
 
       // Emit event after successful initialization
       this.emit(RepositoryEvent.TRACKING_STARTED, api.repositories.length);
+
+      // Emit an event that the repository has been initialized
+      this.emit(RepositoryEvent.REPOSITORY_INITIALIZED, true);
+
       return success(true);
     } catch (error) {
       this.handleError(
