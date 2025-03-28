@@ -94,6 +94,32 @@ export class StatusManager implements vscode.Disposable {
     );
 
     this.logService.info("Successfully connected to RepositoryManager events");
+
+    // Connect to error events
+    repositoryManager.on(RepositoryEvent.ERROR, (error) => {
+      this.setErrorStatus(error.message.substring(0, 20) + "...");
+      // Reset status after a timeout
+      setTimeout(() => this.setTrackingStatus(), 5000);
+    });
+
+    repositoryManager.on(RepositoryEvent.ERROR_GIT_OPERATION, () => {
+      this.setErrorStatus("Git Error");
+      setTimeout(() => this.setTrackingStatus(), 5000);
+    });
+
+    repositoryManager.on(RepositoryEvent.ERROR_CONFIGURATION, () => {
+      this.setErrorStatus("Config Error");
+    });
+
+    repositoryManager.on(RepositoryEvent.ERROR_FILESYSTEM, () => {
+      this.setErrorStatus("File Error");
+      setTimeout(() => this.setTrackingStatus(), 5000);
+    });
+
+    repositoryManager.on(RepositoryEvent.ERROR_REPOSITORY, () => {
+      this.setErrorStatus("Repo Error");
+      setTimeout(() => this.setTrackingStatus(), 5000);
+    });
   }
 
   /**
