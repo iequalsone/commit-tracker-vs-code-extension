@@ -84,6 +84,9 @@ export enum RepositoryEvent {
   STATISTICS_UPDATED = "statistics-updated",
   COMMIT_HISTORY_UPDATED = "commit-history-updated",
   STATUS_UPDATE = "status-update",
+  TERMINAL_OPERATION_REQUESTED = "terminal-operation-requested",
+  SETUP_REQUESTED = "setup-requested",
+  REPOSITORY_INFO_REQUESTED = "repository-info-requested",
 }
 
 export class RepositoryManager extends EventEmitter {
@@ -566,17 +569,17 @@ Repository Path: ${commit.repoPath}\n\n`;
     branch: string
   ): Promise<Result<string, Error>> {
     try {
-      if (!this.gitService) {
-        return failure(new Error("GitService not available"));
-      }
+      logInfo(
+        `Logging commit details for ${headCommit} in ${repoPath} on branch ${branch}`
+      );
 
       // Get commit details
-      const message = await this.gitService.getCommitMessage(
+      const message = await this.gitService?.getCommitMessage(
         repoPath,
         headCommit
       );
       const commitDate = new Date().toISOString();
-      const author = await this.gitService.getCommitAuthorDetails(
+      const author = await this.gitService?.getCommitAuthorDetails(
         repoPath,
         headCommit
       );
@@ -584,49 +587,67 @@ Repository Path: ${commit.repoPath}\n\n`;
       // Get repository name
       let repoName;
       try {
-        repoName = await this.gitService.getRepoNameFromRemote(repoPath);
+        repoName = await this.gitService?.getRepoNameFromRemote(repoPath);
       } catch (error) {
         repoName = path.basename(repoPath);
+        logInfo(`Using directory name as repo name: ${repoName}`);
       }
 
       // Create log message
       const logMessage = `Commit: ${headCommit}
-Message: ${message}
-Author: ${author}
-Date: ${commitDate}
-Branch: ${branch}
-Repository: ${repoName}
-Repository Path: ${repoPath}\n\n`;
+  Message: ${message}
+  Author: ${author}
+  Date: ${commitDate}
+  Branch: ${branch}
+  Repository: ${repoName}
+  Repository Path: ${repoPath}\n\n`;
 
       // Write to log file
-      const trackingFilePath = path.join(this.logFilePath, this.logFile);
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const logFilePath = config.get<string>("logFilePath") || "";
+      const logFile = config.get<string>("logFile") || "commit-tracker.log";
+      const trackingFilePath = path.join(logFilePath, logFile);
+
+      logInfo(`Writing log to: ${trackingFilePath}`);
 
       try {
-        // Ensure the directory exists
-        const fs = require("fs");
-        const path = require("path");
-        const dirPath = path.dirname(trackingFilePath);
-
-        if (!fs.existsSync(dirPath)) {
-          fs.mkdirSync(dirPath, { recursive: true });
+        if (!validatePath(trackingFilePath)) {
+          throw new Error("Invalid tracking file path.");
         }
-
-        // Append to the file
-        fs.appendFileSync(trackingFilePath, logMessage);
-
-        // Request a push via event emission (no direct UI)
-        this.emit(
-          RepositoryEvent.PUSH_REQUESTED,
-          this.logFilePath,
-          trackingFilePath
-        );
-
-        return success(trackingFilePath);
-      } catch (error) {
-        return failure(new Error(`Failed to write to log file: ${error}`));
+        ensureDirectoryExists(path.dirname(trackingFilePath));
+        logInfo(`Ensured directory exists: ${logFilePath}`);
+      } catch (err) {
+        return failure(new Error(`Failed to ensure directory exists: ${err}`));
       }
-    } catch (error) {
-      return failure(new Error(`Failed to log commit details: ${error}`));
+
+      try {
+        await appendToFile(trackingFilePath, logMessage);
+        logInfo(`Successfully logged commit details to ${logFile}`);
+      } catch (err) {
+        return failure(new Error(`Failed to write to ${logFile}: ${err}`));
+      }
+
+      // Request push operation via CommandManager
+      this.requestPush(logFilePath, trackingFilePath);
+
+      // Notify via status update
+      this.sendStatusUpdate({
+        type: "info",
+        message: "Commit logged successfully",
+        details: `${repoName}: ${headCommit.substring(0, 7)}`,
+        duration: 3000,
+      });
+
+      return success(trackingFilePath);
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.handleError(
+        error,
+        "Logging commit details",
+        ErrorType.FILESYSTEM,
+        true
+      );
+      return failure(error);
     }
   }
 
@@ -1791,6 +1812,49 @@ Repository Path: ${repoPath}\n\n`;
     } catch (error) {
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Request a Git operation in a VS Code terminal
+   * This delegates terminal creation to the CommandManager
+   * @param workingDirectory The directory to execute commands in
+   * @param command Git command to execute
+   * @param terminalName Optional terminal name
+   */
+  public requestTerminalOperation(
+    workingDirectory: string,
+    command: string,
+    terminalName: string = "Commit Tracker"
+  ): void {
+    this.emit(
+      RepositoryEvent.TERMINAL_OPERATION_REQUESTED,
+      workingDirectory,
+      command,
+      terminalName
+    );
+  }
+
+  /**
+   * Request setup when configuration is missing or invalid
+   */
+  public requestSetup(): void {
+    this.emit(RepositoryEvent.SETUP_REQUESTED);
+  }
+
+  /**
+   * Request display of repository information
+   */
+  public requestRepositoryInfo(): void {
+    this.emit(RepositoryEvent.REPOSITORY_INFO_REQUESTED);
+  }
+
+  /**
+   * Request a push operation via CommandManager
+   * @param logFilePath Path to the log directory
+   * @param trackingFilePath Path to the tracking file
+   */
+  public requestPush(logFilePath: string, trackingFilePath: string): void {
+    this.emit(RepositoryEvent.PUSH_REQUESTED, logFilePath, trackingFilePath);
   }
 
   /**
