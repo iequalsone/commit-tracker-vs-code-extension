@@ -135,6 +135,10 @@ export class ExtensionManager {
     // Connect components via events
     this.connectComponentsViaEvents();
 
+    // Set up bidirectional communication
+    this.commandManager.setupRepositoryEventListeners();
+    this.repositoryManager.connectCommandManager(this.commandManager);
+
     // Initialize repository manager
     const repoInitResult = await this.repositoryManager.initialize();
 
