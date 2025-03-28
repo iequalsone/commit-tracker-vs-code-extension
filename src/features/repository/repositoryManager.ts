@@ -51,6 +51,17 @@ export interface Commit {
 }
 
 /**
+ * Interface for status updates that can be sent to StatusManager
+ */
+export interface StatusUpdate {
+  type: "normal" | "error" | "warning" | "info" | "processing";
+  message: string;
+  details?: string;
+  duration?: number; // Duration in ms for temporary messages
+  data?: any; // Additional data related to the status
+}
+
+/**
  * Events emitted by the RepositoryManager
  */
 export enum RepositoryEvent {
@@ -72,6 +83,7 @@ export enum RepositoryEvent {
   CACHE_INVALIDATED = "cache-invalidated",
   STATISTICS_UPDATED = "statistics-updated",
   COMMIT_HISTORY_UPDATED = "commit-history-updated",
+  STATUS_UPDATE = "status-update",
 }
 
 export class RepositoryManager extends EventEmitter {
@@ -443,10 +455,13 @@ export class RepositoryManager extends EventEmitter {
 
       const repoPath = repo.rootUri?.fsPath;
       const branch = repo.state?.HEAD?.name || "unknown";
+      let repoName = path.basename(repoPath);
+
+      // Emit status update for processing
+      this.notifyCommitProcessing(repoName, commitHash);
 
       // Show processing status
       if (this.statusManager) {
-        const repoName = path.basename(repoPath);
         this.statusManager.showCommitProcessingStatus(repoName, commitHash);
       }
 
@@ -480,7 +495,6 @@ export class RepositoryManager extends EventEmitter {
       const author = await getCommitAuthorDetails(repoPath, commitHash);
       const date = new Date().toISOString();
 
-      let repoName;
       try {
         repoName = await getRepoNameFromRemote(repoPath);
       } catch (error) {
@@ -525,14 +539,16 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       this.invalidateCache();
 
+      this.notifyCommitSuccess(repoName, commitHash);
+
       return success(commit);
     } catch (error) {
-      this.handleError(
-        error,
-        `processing commit ${commitHash}`,
-        ErrorType.GIT_OPERATION,
-        false
+      this.notifyErrorStatus(
+        `Failed to process commit: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
+
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -1591,6 +1607,18 @@ Repository Path: ${repoPath}\n\n`;
       logFile: this.logFile,
       excludedBranches: this.excludedBranches,
     });
+
+    // Add this status update
+    const configValid = !!this.logFilePath && !!this.logFile;
+    if (configValid) {
+      this.notifyNormalStatus();
+    } else {
+      this.emit(RepositoryEvent.STATUS_UPDATE, {
+        type: "warning",
+        message: "Configuration incomplete",
+        details: "Setup needed for CommitTracker",
+      });
+    }
   }
 
   /**
@@ -1650,6 +1678,119 @@ Repository Path: ${repoPath}\n\n`;
     this.gitService = gitService;
     // Invalidate cache when connecting a new service
     this.invalidateCache();
+  }
+
+  /**
+   * Send a status update event that StatusManager can listen to
+   * @param update Status update information
+   */
+  public sendStatusUpdate(update: StatusUpdate): void {
+    this.emit("status-update", update);
+  }
+
+  /**
+   * Notify about normal tracking status
+   */
+  public notifyNormalStatus(): void {
+    this.emit(RepositoryEvent.STATUS_UPDATE, {
+      type: "normal",
+      message: "Tracking active",
+    });
+  }
+
+  /**
+   * Notify about a repository error
+   * @param error The error that occurred
+   * @param details Additional error details
+   */
+  public notifyErrorStatus(error: Error | string, details?: string): void {
+    const errorMessage = error instanceof Error ? error.message : error;
+    this.emit(RepositoryEvent.STATUS_UPDATE, {
+      type: "error",
+      message: errorMessage,
+      details,
+    });
+  }
+
+  /**
+   * Notify about commit processing
+   * @param repoName Repository name
+   * @param commitHash Commit hash being processed
+   */
+  public notifyCommitProcessing(repoName: string, commitHash: string): void {
+    this.emit(RepositoryEvent.STATUS_UPDATE, {
+      type: "processing",
+      message: `Processing commit in ${repoName}`,
+      data: {
+        repoName,
+        commitHash: commitHash.substring(0, 7),
+      },
+    });
+  }
+
+  /**
+   * Notify about successful commit processing
+   * @param repoName Repository name
+   * @param commitHash Processed commit hash
+   */
+  public notifyCommitSuccess(repoName: string, commitHash: string): void {
+    this.emit(RepositoryEvent.STATUS_UPDATE, {
+      type: "info",
+      message: `Commit ${commitHash.substring(0, 7)} logged`,
+      duration: 3000,
+      data: {
+        repoName,
+        commitHash: commitHash.substring(0, 7),
+      },
+    });
+  }
+
+  /**
+   * Report current repository state
+   * @returns A summary of tracked repositories and their status
+   */
+  public getRepositorySummary(): Result<
+    {
+      totalRepositories: number;
+      trackedRepositories: number;
+      repositoriesWithChanges: number;
+      activeRepository?: string;
+    },
+    Error
+  > {
+    try {
+      const repoStatuses = Array.from(this.repositories.values());
+      const totalRepos = repoStatuses.length;
+      const trackedRepos = repoStatuses.filter(
+        (r) => !this.isBranchExcluded(r.branchName || "")
+      ).length;
+      const reposWithChanges = repoStatuses.filter((r) => r.hasChanges).length;
+
+      // Find active repository (could be focused in VS Code)
+      let activeRepo: string | undefined = undefined;
+      if (vscode.window.activeTextEditor) {
+        const activeDoc = vscode.window.activeTextEditor.document;
+        if (activeDoc && activeDoc.uri.scheme === "file") {
+          const activeFilePath = activeDoc.uri.fsPath;
+          // Find which repo this file belongs to
+          for (const repo of this.repositories.values()) {
+            if (activeFilePath.startsWith(repo.repoPath)) {
+              activeRepo = repo.repoName;
+              break;
+            }
+          }
+        }
+      }
+
+      return success({
+        totalRepositories: totalRepos,
+        trackedRepositories: trackedRepos,
+        repositoriesWithChanges: reposWithChanges,
+        activeRepository: activeRepo,
+      });
+    } catch (error) {
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
   /**
