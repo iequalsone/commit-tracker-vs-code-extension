@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { LogService } from "./logService";
 import { EventEmitter } from "events";
+import { RepositoryEvent } from "../features/repository/repositoryManager";
 
 /**
  * Error types for better categorization and handling
@@ -45,78 +46,66 @@ export class ErrorHandlingService extends EventEmitter {
   }
 
   /**
-   * Handle an error with proper logging, events, and optional UI notifications
+   * Enhanced centralized error handling for repository operations
+   * Maps different error types to appropriate handlers and notifications
    *
-   * @param error The error object or error message
+   * @param error The error that occurred
    * @param operation Description of the operation that failed
-   * @param type The type of error for targeted handling
-   * @param showNotification Whether to show a UI notification
-   * @param suggestions Optional suggestions for resolving the error
+   * @param errorType The specific type of error for targeted handling
+   * @param showNotification Whether to show a notification to the user
    */
   public handleError(
     error: unknown,
     operation: string,
-    type: ErrorType = ErrorType.UNKNOWN,
+    errorType: ErrorType = ErrorType.UNKNOWN,
     showNotification: boolean = false,
-    suggestions?: string[]
+    suggestions: string[] = []
   ): void {
-    // Convert to proper error object
-    const errorObj = error instanceof Error ? error : new Error(String(error));
+    // Add suggestions based on error type
+    switch (errorType) {
+      case ErrorType.CONFIGURATION:
+        suggestions = ["Open Settings", "Run Setup Wizard"];
+        break;
+      case ErrorType.GIT_OPERATION:
+        suggestions = ["Check Git Installation", "Open Terminal"];
+        break;
+      case ErrorType.FILESYSTEM:
+        suggestions = ["Check Permissions", "Select New Location"];
+        break;
+      case ErrorType.REPOSITORY:
+        suggestions = ["Refresh Status"];
+        break;
+    }
 
-    // Create error details
-    const errorDetails: ErrorDetails = {
-      message: errorObj.message,
-      type,
+    // Use the error handling service
+    this.handleError(
+      error,
       operation,
-      originalError: errorObj,
-      suggestions,
-    };
-
-    // Log the error
-    this.logService.error(
-      `[${type}] Error in ${operation}: ${errorObj.message}`
+      errorType,
+      showNotification,
+      suggestions
     );
 
-    // Emit error event
-    this.emit(ErrorEvent.ERROR_OCCURRED, errorDetails);
+    // Always emit legacy events for backward compatibility
+    const errorObj = error instanceof Error ? error : new Error(String(error));
 
-    // Show notification if requested
-    if (showNotification) {
-      let message = `Error: ${errorObj.message}`;
+    // Emit generic error event
+    this.emit(RepositoryEvent.ERROR, errorObj, operation);
 
-      // Add a standard message based on error type
-      switch (type) {
-        case ErrorType.CONFIGURATION:
-          message = `Configuration error: ${errorObj.message}`;
-          break;
-        case ErrorType.GIT_OPERATION:
-          message = `Git error: ${errorObj.message}`;
-          break;
-        case ErrorType.FILESYSTEM:
-          message = `File system error: ${errorObj.message}`;
-          break;
-        case ErrorType.REPOSITORY:
-          message = `Repository error: ${errorObj.message}`;
-          break;
-        case ErrorType.NETWORK:
-          message = `Network error: ${errorObj.message}`;
-          break;
-      }
-
-      // Create notification
-      const notification = vscode.window.showErrorMessage(
-        message,
-        ...(suggestions || [])
-      );
-
-      // Handle suggestion selections
-      if (suggestions && suggestions.length > 0) {
-        notification.then((selection) => {
-          if (selection) {
-            this.emit("suggestion-selected", selection, errorDetails);
-          }
-        });
-      }
+    // Also emit specific error event based on type
+    switch (errorType) {
+      case ErrorType.CONFIGURATION:
+        this.emit(RepositoryEvent.ERROR_CONFIGURATION, errorObj);
+        break;
+      case ErrorType.GIT_OPERATION:
+        this.emit(RepositoryEvent.ERROR_GIT_OPERATION, errorObj);
+        break;
+      case ErrorType.FILESYSTEM:
+        this.emit(RepositoryEvent.ERROR_FILESYSTEM, errorObj);
+        break;
+      case ErrorType.REPOSITORY:
+        this.emit(RepositoryEvent.ERROR_REPOSITORY, errorObj);
+        break;
     }
   }
 
