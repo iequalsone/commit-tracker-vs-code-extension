@@ -6,7 +6,10 @@ import { GitService } from "../../services/gitService";
 import { LogService } from "../../services/logService";
 import { SetupManager } from "../setup/setupManager";
 import { StatusManager } from "../status/statusManager";
-import { RepositoryManager } from "../repository/repositoryManager";
+import {
+  RepositoryEvent,
+  RepositoryManager,
+} from "../repository/repositoryManager";
 
 /**
  * Manages all extension commands and their registration
@@ -39,7 +42,7 @@ export class CommandManager implements vscode.Disposable {
   private setupRepositoryEventListeners(): void {
     if (this.repositoryManager) {
       this.repositoryManager.on(
-        "push-requested",
+        RepositoryEvent.PUSH_REQUESTED,
         this.handlePushRequest.bind(this)
       );
 
@@ -313,10 +316,22 @@ sleep 5
         const api = gitExtension.getAPI(1);
         if (api && api.repositories.length > 0) {
           const repo = api.repositories[0];
-          await this.repositoryManager.processCurrentRepository(repo);
-          vscode.window.showInformationMessage(
-            "Manually processed current commit"
-          );
+          const repoPath = repo.rootUri.fsPath;
+          const headCommit = repo.state.HEAD?.commit;
+          const branch = repo.state.HEAD?.name || "unknown";
+
+          if (headCommit) {
+            await this.repositoryManager.processCommitDirectly(
+              repoPath,
+              headCommit,
+              branch
+            );
+            vscode.window.showInformationMessage(
+              "Manually processed current commit"
+            );
+          } else {
+            vscode.window.showErrorMessage("No HEAD commit found");
+          }
           this.statusManager.setTrackingStatus();
         } else {
           const errorMsg = "No Git repositories found";
