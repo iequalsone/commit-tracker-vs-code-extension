@@ -69,6 +69,9 @@ export enum RepositoryEvent {
   CONFIG_UPDATED = "config-updated",
   REPOSITORY_STATUS_CHANGED = "repository-status-changed",
   UNPUSHED_COMMITS_CHANGED = "unpushed-commits-changed",
+  CACHE_INVALIDATED = "cache-invalidated",
+  STATISTICS_UPDATED = "statistics-updated",
+  COMMIT_HISTORY_UPDATED = "commit-history-updated",
 }
 
 export class RepositoryManager extends EventEmitter {
@@ -84,6 +87,33 @@ export class RepositoryManager extends EventEmitter {
   private commandManager: CommandManager | undefined;
   private errorHandlingService: ErrorHandlingService;
   private gitService: GitService | undefined;
+
+  private cache: {
+    commitHistory?: {
+      data: Commit[];
+      timestamp: number;
+    };
+    statistics?: {
+      data: {
+        totalCommits: number;
+        commitsByRepo: Record<string, number>;
+        commitsByAuthor: Record<string, number>;
+        commitsByBranch: Record<string, number>;
+        lastCommitDate: Date | null;
+      };
+      timestamp: number;
+    };
+    unpushedDetails?: {
+      data: {
+        count: number;
+        commitHashes: string[];
+        needsPush: boolean;
+      };
+      timestamp: number;
+    };
+  } = {};
+
+  private readonly CACHE_TTL = 60 * 1000; // 1 minute cache lifetime
 
   constructor(
     context: vscode.ExtensionContext,
@@ -102,6 +132,10 @@ export class RepositoryManager extends EventEmitter {
       "lastProcessedCommit",
       null
     );
+
+    if (!this.context.globalState.get("cacheCreated")) {
+      this.context.globalState.update("cacheCreated", new Date());
+    }
 
     // Use provided error handling service or create a basic one
     this.errorHandlingService =
@@ -124,6 +158,22 @@ export class RepositoryManager extends EventEmitter {
     if (this.statusManager) {
       this.setupStatusManagerEvents();
     }
+  }
+
+  /**
+   * Invalidate specific parts of the cache or the entire cache
+   * @param cacheKey Optional specific cache key to invalidate
+   */
+  public invalidateCache(
+    cacheKey?: "commitHistory" | "statistics" | "unpushedDetails"
+  ): void {
+    if (cacheKey) {
+      delete this.cache[cacheKey];
+    } else {
+      this.cache = {};
+    }
+
+    this.emit(RepositoryEvent.REPOSITORY_STATUS_CHANGED);
   }
 
   /**
@@ -424,6 +474,8 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       // Emit event that commit was processed
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commit, trackingFilePath);
+
+      this.invalidateCache();
 
       return success(commit);
     } catch (error) {
@@ -794,6 +846,375 @@ Repository Path: ${repoPath}\n\n`;
         ErrorType.REPOSITORY,
         true
       );
+    }
+  }
+
+  /**
+   * Get detailed information about all repositories being tracked
+   * @returns Result containing an array of repository status objects
+   */
+  public getAllRepositories(): Result<RepositoryStatus[], Error> {
+    try {
+      const repositoryStatuses: RepositoryStatus[] = [];
+
+      // Convert the Map values to an array
+      this.repositories.forEach((status) => {
+        repositoryStatuses.push(status);
+      });
+
+      return success(repositoryStatuses);
+    } catch (error) {
+      this.handleError(
+        error,
+        "getting all repositories",
+        ErrorType.REPOSITORY,
+        false
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Get statistics about tracked commits
+   * @returns Result containing repository statistics
+   */
+  public async getCommitStatistics(): Promise<
+    Result<
+      {
+        totalCommits: number;
+        commitsByRepo: Record<string, number>;
+        commitsByAuthor: Record<string, number>;
+        commitsByBranch: Record<string, number>;
+        lastCommitDate: Date | null;
+      },
+      Error
+    >
+  > {
+    try {
+      const now = Date.now();
+
+      // Check cache
+      if (
+        this.cache.statistics &&
+        now - this.cache.statistics.timestamp < this.CACHE_TTL
+      ) {
+        return success(this.cache.statistics.data);
+      }
+
+      // Initialize statistics
+      const statistics = {
+        totalCommits: 0,
+        commitsByRepo: {} as Record<string, number>,
+        commitsByAuthor: {} as Record<string, number>,
+        commitsByBranch: {} as Record<string, number>,
+        lastCommitDate: null as Date | null,
+      };
+
+      // Read the log file
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const logFilePath = config.get<string>("logFilePath");
+      const logFile = config.get<string>("logFile", "commit-tracker.log");
+
+      if (!logFilePath) {
+        return failure(new Error("Log file path not configured"));
+      }
+
+      const fullLogPath = path.join(logFilePath, logFile);
+
+      if (!fs.existsSync(fullLogPath)) {
+        return success(statistics); // Return empty stats if file doesn't exist
+      }
+
+      // Read the file
+      const content = await fs.promises.readFile(fullLogPath, "utf8");
+      const commitSections = content
+        .split("\n\n")
+        .filter((section) => section.trim().length > 0);
+
+      statistics.totalCommits = commitSections.length;
+
+      // Process each commit section
+      for (const section of commitSections) {
+        const lines = section.split("\n");
+        let repo = "";
+        let author = "";
+        let branch = "";
+        let date = null;
+
+        for (const line of lines) {
+          if (line.startsWith("Repository: ")) {
+            repo = line.substring("Repository: ".length);
+          } else if (line.startsWith("Author: ")) {
+            author = line.substring("Author: ".length);
+          } else if (line.startsWith("Branch: ")) {
+            branch = line.substring("Branch: ".length);
+          } else if (line.startsWith("Date: ")) {
+            const dateStr = line.substring("Date: ".length);
+            date = new Date(dateStr);
+
+            // Update last commit date if needed
+            if (
+              !statistics.lastCommitDate ||
+              date > statistics.lastCommitDate
+            ) {
+              statistics.lastCommitDate = date;
+            }
+          }
+        }
+
+        // Update statistics
+        if (repo) {
+          statistics.commitsByRepo[repo] =
+            (statistics.commitsByRepo[repo] || 0) + 1;
+        }
+
+        if (author) {
+          statistics.commitsByAuthor[author] =
+            (statistics.commitsByAuthor[author] || 0) + 1;
+        }
+
+        if (branch) {
+          statistics.commitsByBranch[branch] =
+            (statistics.commitsByBranch[branch] || 0) + 1;
+        }
+      }
+
+      // Update cache before returning
+      this.cache.statistics = {
+        data: statistics,
+        timestamp: now,
+      };
+
+      return success(statistics);
+    } catch (error) {
+      this.handleError(
+        error,
+        "getting commit statistics",
+        ErrorType.FILESYSTEM,
+        false
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Get detailed information about unpushed commits in the tracking repository
+   * @returns Result containing unpushed commit details
+   */
+  public async getUnpushedCommitDetails(): Promise<
+    Result<
+      {
+        count: number;
+        commitHashes: string[];
+        needsPush: boolean;
+      },
+      Error
+    >
+  > {
+    try {
+      const now = Date.now();
+
+      // Check cache
+      if (
+        this.cache.unpushedDetails &&
+        now - this.cache.unpushedDetails.timestamp < this.CACHE_TTL
+      ) {
+        return success(this.cache.unpushedDetails.data);
+      }
+
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const logFilePath = config.get<string>("logFilePath");
+
+      if (!logFilePath) {
+        return failure(new Error("Log file path not configured"));
+      }
+
+      if (!this.gitService) {
+        return failure(new Error("Git service not available"));
+      }
+
+      const hasUnpushed = await this.gitService.hasUnpushedCommits();
+
+      if (!hasUnpushed) {
+        return success({
+          count: 0,
+          commitHashes: [],
+          needsPush: false,
+        });
+      }
+
+      // Get unpushed commit hashes
+      const commitHashes = await this.gitService.getUnpushedCommitHashes(
+        logFilePath
+      );
+
+      // Update cache before returning
+      this.cache.unpushedDetails = {
+        data: {
+          count: commitHashes.length,
+          commitHashes,
+          needsPush: commitHashes.length > 0,
+        },
+        timestamp: now,
+      };
+
+      return success({
+        count: commitHashes.length,
+        commitHashes,
+        needsPush: commitHashes.length > 0,
+      });
+    } catch (error) {
+      this.handleError(
+        error,
+        "getting unpushed commit details",
+        ErrorType.GIT_OPERATION,
+        false
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Get caching status for the repository manager
+   * @returns Result containing cache information
+   */
+  public getCacheStatus(): Result<
+    {
+      lastProcessedCommit: string | null;
+      repositoriesTracked: number;
+      cacheCreated: Date;
+      cacheLastUpdated: Date;
+    },
+    Error
+  > {
+    try {
+      return success({
+        lastProcessedCommit: this.lastProcessedCommit,
+        repositoriesTracked: this.repositories.size,
+        cacheCreated:
+          this.context.globalState.get("cacheCreated") || new Date(),
+        cacheLastUpdated: new Date(),
+      });
+    } catch (error) {
+      this.handleError(error, "getting cache status", ErrorType.UNKNOWN, false);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Check branch exclusion status for a given branch
+   * @param branchName The name of the branch to check
+   * @returns True if the branch is excluded, false otherwise
+   */
+  public isBranchExcluded(branchName: string): boolean {
+    return this.excludedBranches.includes(branchName);
+  }
+
+  /**
+   * Get the history of processed commits from the tracking log
+   * @param limit Optional number of commits to retrieve (default: 10)
+   * @returns Result containing commit history
+   */
+  public async getCommitHistory(
+    limit: number = 10
+  ): Promise<Result<Commit[], Error>> {
+    try {
+      const now = Date.now();
+
+      // Check cache only if requesting default amount
+      if (
+        limit === 10 &&
+        this.cache.commitHistory &&
+        now - this.cache.commitHistory.timestamp < this.CACHE_TTL
+      ) {
+        return success(this.cache.commitHistory.data);
+      }
+
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const logFilePath = config.get<string>("logFilePath");
+      const logFile = config.get<string>("logFile", "commit-tracker.log");
+
+      if (!logFilePath) {
+        return failure(new Error("Log file path not configured"));
+      }
+
+      const fullLogPath = path.join(logFilePath, logFile);
+
+      if (!fs.existsSync(fullLogPath)) {
+        return success([]); // Return empty array if file doesn't exist
+      }
+
+      // Read the file
+      const content = await fs.promises.readFile(fullLogPath, "utf8");
+      const commitSections = content
+        .split("\n\n")
+        .filter((section) => section.trim().length > 0);
+
+      // Process most recent commits first (reverse order)
+      const commits: Commit[] = [];
+      for (
+        let i = commitSections.length - 1;
+        i >= Math.max(0, commitSections.length - limit);
+        i--
+      ) {
+        const section = commitSections[i];
+        const lines = section.split("\n");
+
+        // Extract commit data
+        let hash = "";
+        let message = "";
+        let author = "";
+        let date = "";
+        let branch = "";
+        let repoName = "";
+        let repoPath = "";
+
+        for (const line of lines) {
+          if (line.startsWith("Commit: ")) {
+            hash = line.substring("Commit: ".length);
+          } else if (line.startsWith("Message: ")) {
+            message = line.substring("Message: ".length);
+          } else if (line.startsWith("Author: ")) {
+            author = line.substring("Author: ".length);
+          } else if (line.startsWith("Date: ")) {
+            date = line.substring("Date: ".length);
+          } else if (line.startsWith("Branch: ")) {
+            branch = line.substring("Branch: ".length);
+          } else if (line.startsWith("Repository: ")) {
+            repoName = line.substring("Repository: ".length);
+          } else if (line.startsWith("Repository Path: ")) {
+            repoPath = line.substring("Repository Path: ".length);
+          }
+        }
+
+        commits.push({
+          hash,
+          message,
+          author,
+          date,
+          branch,
+          repoName,
+          repoPath,
+        });
+      }
+
+      // Update cache if using default limit
+      if (limit === 10) {
+        this.cache.commitHistory = {
+          data: commits,
+          timestamp: now,
+        };
+      }
+
+      return success(commits);
+    } catch (error) {
+      this.handleError(
+        error,
+        "getting commit history",
+        ErrorType.FILESYSTEM,
+        false
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
