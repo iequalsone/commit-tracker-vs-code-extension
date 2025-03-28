@@ -56,6 +56,10 @@ export enum RepositoryEvent {
   COMMIT_FAILED = "commit-failed",
   REPOSITORY_CHANGED = "repository-changed",
   ERROR = "error",
+  ERROR_CONFIGURATION = "error-configuration",
+  ERROR_GIT_OPERATION = "error-git-operation",
+  ERROR_FILESYSTEM = "error-filesystem",
+  ERROR_REPOSITORY = "error-repository",
   PUSH_REQUESTED = "push-requested",
   CONFIG_UPDATED = "config-updated",
   REPOSITORY_STATUS_CHANGED = "repository-status-changed",
@@ -100,6 +104,32 @@ export class RepositoryManager extends EventEmitter {
     // Set up event listeners to update status
     if (this.statusManager) {
       this.setupStatusManagerEvents();
+    }
+  }
+
+  // Add this after the class declaration, before any methods
+  /**
+   * Centralized error handling for repository operations
+   * @param error The error that occurred
+   * @param operation Description of the operation that failed
+   * @param errorType The specific type of error for targeted handling
+   */
+  private handleError(
+    error: unknown,
+    operation: string,
+    errorType: RepositoryEvent = RepositoryEvent.ERROR
+  ): void {
+    const errorObj = error instanceof Error ? error : new Error(String(error));
+
+    // Log the error
+    logError(`Repository error during ${operation}: ${errorObj.message}`);
+
+    // Emit generic error event
+    this.emit(RepositoryEvent.ERROR, errorObj, operation);
+
+    // Also emit specific error event if provided
+    if (errorType !== RepositoryEvent.ERROR) {
+      this.emit(errorType, errorObj, operation);
     }
   }
 
@@ -161,16 +191,23 @@ export class RepositoryManager extends EventEmitter {
       } catch (err) {
         logError(`Failed to pull changes from tracking repository: ${err}`);
         // Emit error but continue initialization
-        this.emit(
-          RepositoryEvent.ERROR,
-          new Error(`Failed to pull changes: ${err}`)
+        this.handleError(
+          err,
+          "pulling changes from tracking repository",
+          RepositoryEvent.ERROR_GIT_OPERATION
         );
       }
 
       const gitExtension =
         vscode.extensions.getExtension("vscode.git")?.exports;
       if (!gitExtension) {
-        return failure(new Error("Git extension is not available"));
+        const error = new Error("Git extension is not available");
+        this.handleError(
+          error,
+          "initializing repository monitoring",
+          RepositoryEvent.ERROR_CONFIGURATION
+        );
+        return failure(error);
       }
 
       const api = gitExtension.getAPI(1);
@@ -213,6 +250,7 @@ export class RepositoryManager extends EventEmitter {
       this.emit(RepositoryEvent.TRACKING_STARTED, api.repositories.length);
       return success(true);
     } catch (error) {
+      this.handleError(error, "initializing repository manager");
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -325,7 +363,11 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       return success(commit);
     } catch (error) {
-      this.emit(RepositoryEvent.ERROR, error);
+      this.handleError(
+        error,
+        `processing commit ${commitHash}`,
+        RepositoryEvent.ERROR_GIT_OPERATION
+      );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -411,8 +453,11 @@ Repository Path: ${repoPath}\n\n`;
       logInfo("Commit logging complete");
       return success(trackingFilePath);
     } catch (err) {
-      logInfo(`Failed to log commit details: ${err}`);
-      this.emit(RepositoryEvent.ERROR, err);
+      this.handleError(
+        err,
+        `logging commit details for ${headCommit}`,
+        RepositoryEvent.ERROR_FILESYSTEM
+      );
       return failure(err instanceof Error ? err : new Error(String(err)));
     }
   }
