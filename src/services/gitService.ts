@@ -1,8 +1,9 @@
-import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import { execSync } from "child_process";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { logError, logInfo } from "../utils/logger";
 
 // Cache interface for storing git operation results
@@ -39,6 +40,7 @@ export class GitService {
   private readonly DEFAULT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
   private logService: any; // Will be properly typed when injected
   private terminalProvider?: TerminalProvider;
+  private _getWorkspaceRoot: (() => string | null) | null = null;
 
   /**
    * Create a new GitService instance
@@ -95,6 +97,17 @@ export class GitService {
         this.logService.error(`Error running script in terminal: ${error}`);
       }
       return false;
+    }
+  }
+
+  /**
+   * Sets a workspace provider for the git service
+   * @param provider Function that returns the current workspace path
+   */
+  public setWorkspaceProvider(provider: () => string | null): void {
+    this._getWorkspaceRoot = provider;
+    if (this.logService) {
+      this.logService.info("Workspace provider set for GitService");
     }
   }
 
@@ -465,11 +478,14 @@ sleep 3
    * @returns The workspace path or null if no workspace is open
    */
   private getWorkspaceRoot(): string | null {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      return null;
+    if (this._getWorkspaceRoot) {
+      return this._getWorkspaceRoot();
     }
-    return workspaceFolders[0].uri.fsPath;
+
+    if (this.logService) {
+      this.logService.warn("No workspace provider set for GitService");
+    }
+    return null;
   }
 
   /**
