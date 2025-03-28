@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
-import { execSync } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { execSync } from "child_process";
+import { logError, logInfo } from "../utils/logger";
 
 // Cache interface for storing git operation results
 interface GitCache {
@@ -13,12 +14,97 @@ interface GitCache {
 }
 
 /**
+ * Interface for terminal operations - allows GitService to remain UI-independent
+ */
+export interface TerminalProvider {
+  createTerminal(options: {
+    name: string;
+    cwd?: string;
+    shellPath?: string;
+    shellArgs?: string[];
+    hideFromUser?: boolean;
+  }): {
+    show(preserveFocus?: boolean): void;
+    sendText(text: string, addNewLine?: boolean): void;
+    dispose(): void;
+  };
+}
+
+/**
  * Service that handles all Git operations
  */
 export class GitService {
   // Cache storage with a default 5-minute TTL
   private cache: GitCache = {};
   private readonly DEFAULT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private logService: any; // Will be properly typed when injected
+  private terminalProvider?: TerminalProvider;
+
+  /**
+   * Create a new GitService instance
+   * @param logService Optional log service for logging operations
+   * @param terminalProvider Optional terminal provider for UI operations
+   */
+  constructor(logService?: any, terminalProvider?: TerminalProvider) {
+    this.logService = logService;
+    this.terminalProvider = terminalProvider;
+  }
+
+  /**
+   * Set the terminal provider after construction
+   * @param terminalProvider The terminal provider to use
+   */
+  public setTerminalProvider(terminalProvider: TerminalProvider): void {
+    this.terminalProvider = terminalProvider;
+  }
+
+  /**
+   * Run a script in a terminal if terminal provider is available
+   * @param scriptPath Path to script to run
+   * @param terminalName Name for the terminal
+   * @param workingDirectory Optional working directory
+   * @returns True if terminal was created, false if not possible
+   */
+  public runScriptInTerminal(
+    scriptPath: string,
+    terminalName: string = "Git Operation",
+    workingDirectory?: string
+  ): boolean {
+    if (!this.terminalProvider) {
+      if (this.logService) {
+        this.logService.warn(
+          "Terminal provider not set, cannot run script in terminal"
+        );
+      }
+      return false;
+    }
+
+    try {
+      const terminal = this.terminalProvider.createTerminal({
+        name: terminalName,
+        cwd: workingDirectory,
+        hideFromUser: false,
+      });
+
+      terminal.show();
+      terminal.sendText(`bash "${scriptPath}" && exit || exit`);
+
+      return true;
+    } catch (error) {
+      if (this.logService) {
+        this.logService.error(`Error running script in terminal: ${error}`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Set the log service after construction
+   * @param logService The log service to use
+   */
+  public setLogService(logService: any): void {
+    this.logService = logService;
+  }
 
   /**
    * Gets the current branch name
@@ -765,6 +851,232 @@ echo "=== Git Operation Complete ==="
 echo "Terminal will close in 3 seconds..."
 sleep 3
 `;
+
+    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+    return scriptPath;
+  }
+
+  /**
+   * Checks if a path is a Git repository
+   * @param repoPath Path to check
+   * @returns True if the path is a Git repository
+   */
+  public isGitRepository(repoPath: string): boolean {
+    try {
+      if (!fs.existsSync(repoPath)) {
+        return false;
+      }
+
+      return fs.existsSync(path.join(repoPath, ".git"));
+    } catch (error) {
+      if (this.logService) {
+        this.logService.error(
+          `Error checking if path is a Git repository: ${error}`
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Gets the remote URL for a repository
+   * @param repoPath Path to the repository
+   * @returns The remote URL or null if not found
+   */
+  public getRemoteUrl(repoPath: string): string | null {
+    try {
+      // Generate cache key
+      const cacheKey = `remote:url:${repoPath}`;
+
+      // Try to get from cache with longer TTL
+      const cachedValue = this.getFromCache(cacheKey, 30 * 60 * 1000); // 30 minutes TTL
+      if (cachedValue !== null) {
+        return cachedValue;
+      }
+
+      const remoteUrl = execSync("git remote get-url origin", {
+        cwd: repoPath,
+      })
+        .toString()
+        .trim();
+
+      // Store in cache
+      this.setInCache(cacheKey, remoteUrl);
+
+      return remoteUrl;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Get the short status of a repository
+   * @param repoPath Path to the repository
+   * @returns Short status string
+   */
+  public getShortStatus(repoPath: string): string {
+    try {
+      // Generate cache key
+      const cacheKey = `status:short:${repoPath}`;
+
+      // Try to get from cache with very short TTL (status changes frequently)
+      const cachedValue = this.getFromCache(cacheKey, 5 * 1000); // 5 seconds TTL
+      if (cachedValue !== null) {
+        return cachedValue;
+      }
+
+      const status = execSync("git status --porcelain", {
+        cwd: repoPath,
+      })
+        .toString()
+        .trim();
+
+      // Store in cache
+      this.setInCache(cacheKey, status);
+
+      return status;
+    } catch (error) {
+      if (this.logService) {
+        this.logService.error(`Error getting short status: ${error}`);
+      }
+      return "";
+    }
+  }
+
+  /**
+   * Checks if a repository has changes
+   * @param repoPath Path to the repository
+   * @returns True if the repository has uncommitted changes
+   */
+  public hasUncommittedChanges(repoPath: string): boolean {
+    try {
+      const status = this.getShortStatus(repoPath);
+      return status.length > 0;
+    } catch (error) {
+      if (this.logService) {
+        this.logService.error(
+          `Error checking for uncommitted changes: ${error}`
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Creates a push script with specific options
+   * @param repoPath Path to the repository
+   * @param filePath Path to the file being committed
+   * @param options Additional options for the script
+   * @returns Path to the created script
+   */
+  public createAdvancedPushScript(
+    repoPath: string,
+    filePath: string,
+    options: {
+      commitMessage?: string;
+      showOutput?: boolean;
+      autoClose?: boolean;
+      timeout?: number;
+    } = {}
+  ): string {
+    // Default options
+    const defaults = {
+      commitMessage: `Update commit log - ${new Date().toISOString()}`,
+      showOutput: true,
+      autoClose: true,
+      timeout: 5,
+    };
+
+    const settings = { ...defaults, ...options };
+
+    // Create a temporary shell script
+    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+
+    // Build a more customizable script
+    const scriptContent = `#!/bin/bash
+  # Commit-tracker push script
+  ${settings.showOutput ? 'echo "=== Commit Tracker Automatic Push ==="' : ""}
+  ${settings.showOutput ? `echo "Repository: ${repoPath}"` : ""}
+  
+  # Change to the repository directory
+  cd "${repoPath}" || { ${
+      settings.showOutput
+        ? 'echo "Failed to change to repository directory"'
+        : ""
+    }; exit 1; }
+  
+  # Stage the file
+  ${settings.showOutput ? `echo "Adding file: ${filePath}"` : ""}
+  git add "${filePath}"
+  
+  # Commit changes if needed
+  if git status --porcelain | grep -q .; then
+    ${settings.showOutput ? 'echo "Changes detected, committing..."' : ""}
+    git commit -m "${settings.commitMessage}"
+    ${settings.showOutput ? 'echo "Commit successful"' : ""}
+  else
+    ${settings.showOutput ? 'echo "No changes to commit"' : ""}
+    ${settings.autoClose ? `sleep 2` : ""}
+    exit 0
+  fi
+  
+  # Check if remote exists
+  if git remote | grep -q origin; then
+    ${settings.showOutput ? "echo \"Remote 'origin' exists\"" : ""}
+    
+    # Get current branch
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    ${settings.showOutput ? 'echo "Current branch: $CURRENT_BRANCH"' : ""}
+    
+    # Push changes
+    ${
+      settings.showOutput
+        ? 'echo "Pushing changes to origin/$CURRENT_BRANCH..."'
+        : ""
+    }
+    git push
+    
+    # Check if push succeeded
+    if [ $? -eq 0 ]; then
+      ${settings.showOutput ? 'echo "Push successful!"' : ""}
+    else
+      ${
+        settings.showOutput
+          ? 'echo "Push failed, trying with upstream tracking..."'
+          : ""
+      }
+      git push -u origin $CURRENT_BRANCH
+      
+      if [ $? -eq 0 ]; then
+        ${
+          settings.showOutput
+            ? 'echo "Push with upstream tracking successful!"'
+            : ""
+        }
+      else
+        exit 1
+      fi
+    fi
+  else
+    ${
+      settings.showOutput
+        ? "echo \"No remote 'origin' configured, skipping push\""
+        : ""
+    }
+  fi
+  
+  ${settings.showOutput ? 'echo "=== Commit Tracker Push Complete ==="' : ""}
+  ${
+    settings.autoClose
+      ? `${
+          settings.showOutput
+            ? `echo "Terminal will close in ${settings.timeout} seconds..."`
+            : ""
+        }`
+      : ""
+  }
+  ${settings.autoClose ? `sleep ${settings.timeout}` : ""}
+  `;
 
     fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
     return scriptPath;
