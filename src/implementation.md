@@ -71,7 +71,7 @@ Enhance Functionality
 Integration with Other Modules
 [x] Define clean interfaces with StatusManager
 [x] Establish proper communication with CommandManager
-<input disabled="" type="checkbox"> Ensure SetupManager can correctly initialize repositories
+[x] Ensure SetupManager can correctly initialize repositories
 
 Phase 4: Service Refinement
 <input disabled="" type="checkbox"> Review and refine gitService
