@@ -119,6 +119,15 @@ export class ExtensionManager {
     // Initialize with both logService and terminalProvider
     this.gitService = new GitService(this.logService, terminalProvider);
 
+    // Add a workspace provider
+    this.gitService.setWorkspaceProvider(() => {
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders || workspaceFolders.length === 0) {
+        return null;
+      }
+      return workspaceFolders[0].uri.fsPath;
+    });
+
     // Initialize StatusManager first
     this.statusManager = new StatusManager(
       this.context,
