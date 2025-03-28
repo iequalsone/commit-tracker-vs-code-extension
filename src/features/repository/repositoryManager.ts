@@ -5,6 +5,7 @@ import {
   getCommitAuthorDetails,
   getCommitMessage,
   getRepoNameFromRemote,
+  GitService,
   pullChanges,
 } from "../../services/gitService";
 import {
@@ -72,9 +73,9 @@ export enum RepositoryEvent {
 
 export class RepositoryManager extends EventEmitter {
   private disposableManager: DisposableManager;
-  private logFilePath: string;
-  private logFile: string;
-  private excludedBranches: string[];
+  private logFilePath: string = "";
+  private logFile: string = "";
+  private excludedBranches: string[] = [];
   private context: vscode.ExtensionContext;
   private lastProcessedCommit: string | null;
   private repoListeners: Map<string, vscode.Disposable> = new Map();
@@ -82,17 +83,20 @@ export class RepositoryManager extends EventEmitter {
   private statusManager: StatusManager | undefined;
   private commandManager: CommandManager | undefined;
   private errorHandlingService: ErrorHandlingService;
+  private gitService: GitService | undefined;
 
   constructor(
     context: vscode.ExtensionContext,
     statusManager?: StatusManager,
     commandManager?: CommandManager,
-    errorHandlingService?: ErrorHandlingService
+    errorHandlingService?: ErrorHandlingService,
+    gitService?: GitService
   ) {
     super();
     this.context = context;
     this.statusManager = statusManager;
     this.commandManager = commandManager;
+    this.gitService = gitService;
     this.disposableManager = DisposableManager.getInstance();
     this.lastProcessedCommit = context.globalState.get(
       "lastProcessedCommit",
@@ -112,10 +116,7 @@ export class RepositoryManager extends EventEmitter {
       } as ErrorHandlingService);
 
     // Load configuration
-    const config = vscode.workspace.getConfiguration("commitTracker");
-    this.logFilePath = config.get<string>("logFilePath")!;
-    this.logFile = config.get<string>("logFile")!;
-    this.excludedBranches = config.get<string[]>("excludedBranches")!;
+    this.loadConfiguration();
 
     this.setupConfigChangeListener();
 
@@ -437,7 +438,7 @@ Repository Path: ${commit.repoPath}\n\n`;
   }
 
   /**
-   * Log commit details to the tracking file
+   * Log commit details to the tracking file using pure business logic
    * @param repoPath Repository path
    * @param headCommit Commit hash
    * @param branch Branch name
@@ -481,12 +482,8 @@ Repository Path: ${repoPath}\n\n`;
       logInfo(`Writing log to: ${trackingFilePath}`);
 
       if (!validatePath(trackingFilePath)) {
-        const error = new Error("Invalid tracking file path");
-        this.handleError(
-          error,
-          "validating tracking file path",
-          ErrorType.FILESYSTEM
-        );
+        const error = new Error("Invalid tracking file path.");
+        this.handleError(error, "validating path", ErrorType.FILESYSTEM, false);
         return failure(error);
       }
 
@@ -497,7 +494,8 @@ Repository Path: ${repoPath}\n\n`;
         this.handleError(
           err,
           "ensuring directory exists",
-          ErrorType.FILESYSTEM
+          ErrorType.FILESYSTEM,
+          true
         );
         return failure(err instanceof Error ? err : new Error(String(err)));
       }
@@ -508,13 +506,14 @@ Repository Path: ${repoPath}\n\n`;
       } catch (err) {
         this.handleError(
           err,
-          `writing to ${this.logFile}`,
-          ErrorType.FILESYSTEM
+          "writing to log file",
+          ErrorType.FILESYSTEM,
+          true
         );
         return failure(err instanceof Error ? err : new Error(String(err)));
       }
 
-      // Emit commit processed event with info needed for potential push
+      // Create commit info object for event
       const commitInfo = {
         hash: headCommit,
         message,
@@ -525,6 +524,7 @@ Repository Path: ${repoPath}\n\n`;
         repoPath,
       };
 
+      // Emit commit processed event
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commitInfo, trackingFilePath);
 
       // Emit push requested event for CommandManager to handle
@@ -539,8 +539,9 @@ Repository Path: ${repoPath}\n\n`;
     } catch (err) {
       this.handleError(
         err,
-        `logging commit details for ${headCommit}`,
-        ErrorType.FILESYSTEM
+        "logging commit details",
+        ErrorType.FILESYSTEM,
+        true
       );
       return failure(err instanceof Error ? err : new Error(String(err)));
     }
@@ -633,6 +634,166 @@ Repository Path: ${repoPath}\n\n`;
         true
       );
       return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Process the current repository for the manual logging command
+   * @param repo The repository to process
+   * @returns Result indicating success or failure
+   */
+  public async processCurrentRepository(
+    repo: any
+  ): Promise<Result<Commit, Error>> {
+    try {
+      logInfo("Manually processing repository");
+
+      if (!repo) {
+        return failure(new Error("Repository object is null or undefined"));
+      }
+
+      if (!repo.state) {
+        return failure(new Error("Repository state is null or undefined"));
+      }
+
+      if (!repo.state.HEAD) {
+        return failure(new Error("Repository HEAD is null or undefined"));
+      }
+
+      const headCommit = repo.state.HEAD?.commit;
+      const branch = repo.state.HEAD?.name;
+      const repoPath = repo.rootUri.fsPath;
+
+      logInfo(
+        `Repository info - Path: ${repoPath || "unknown"}, Commit: ${
+          headCommit || "unknown"
+        }, Branch: ${branch || "unknown"}`
+      );
+
+      if (!headCommit) {
+        return failure(new Error("No HEAD commit found"));
+      }
+
+      // Skip excluded branches
+      if (this.excludedBranches.includes(branch)) {
+        const error = new Error(
+          `Skipping logging for excluded branch: ${branch}`
+        );
+        // Emit an event instead of showing UI notification
+        this.emit(RepositoryEvent.COMMIT_FAILED, repo, headCommit, error);
+        return failure(error);
+      }
+
+      // Process the commit
+      return await this.processCommit(repo, headCommit);
+    } catch (error) {
+      this.handleError(
+        error,
+        "processing current repository",
+        ErrorType.REPOSITORY,
+        false
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Process repository changes using event-based notifications
+   * @param repo Repository that changed
+   */
+  private async processRepositoryChange(repo: any): Promise<void> {
+    try {
+      const headCommit = repo.state.HEAD?.commit;
+      const branch = repo.state.HEAD?.name;
+      const repoPath = repo.rootUri.fsPath;
+
+      logInfo(
+        `Repository change detected - Commit: ${headCommit}, Branch: ${branch}`
+      );
+
+      if (!headCommit) {
+        const error = new Error("No HEAD commit found in repository");
+        this.emit(RepositoryEvent.ERROR, error, "checking HEAD commit");
+        return;
+      }
+
+      // Skip excluded branches
+      if (this.excludedBranches.includes(branch)) {
+        logInfo(`Skipping logging for excluded branch: ${branch}`);
+        return;
+      }
+
+      // Check if author is allowed
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      const allowedAuthors = config.get<string[]>("allowedAuthors") || [];
+
+      if (allowedAuthors.length > 0) {
+        try {
+          const author = await getCommitAuthorDetails(repoPath, headCommit);
+          logInfo(`Commit author: ${author}`);
+
+          if (!allowedAuthors.includes(author)) {
+            logInfo(`Skipping commit from non-allowed author: ${author}`);
+            return;
+          }
+        } catch (error) {
+          this.emit(RepositoryEvent.ERROR, error, "checking commit author");
+          return;
+        }
+      }
+
+      // Check if commit was already processed
+      // First, check against the last processed commit in memory
+      if (this.lastProcessedCommit === headCommit) {
+        logInfo(`Skipping already processed commit: ${headCommit}`);
+        return;
+      }
+
+      // Then check the log file
+      try {
+        const logPath = path.join(this.logFilePath, this.logFile);
+        if (fs.existsSync(logPath)) {
+          const logContent = fs.readFileSync(logPath, "utf8");
+          if (logContent.includes(headCommit)) {
+            logInfo(
+              `Commit ${headCommit} already exists in log file, skipping`
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        this.handleError(
+          error,
+          "checking log file",
+          ErrorType.FILESYSTEM,
+          false
+        );
+      }
+
+      // Emit event that commit was detected
+      this.emit(RepositoryEvent.COMMIT_DETECTED, repo, headCommit);
+
+      logInfo(`Processing new commit: ${headCommit}`);
+      this.lastProcessedCommit = headCommit;
+      await this.context.globalState.update("lastProcessedCommit", headCommit);
+
+      // Process the commit and handle the result
+      const result = await this.logCommitDetails(repoPath, headCommit, branch);
+      if (result.isFailure()) {
+        this.emit(
+          RepositoryEvent.COMMIT_FAILED,
+          repo,
+          headCommit,
+          result.error
+        );
+      }
+    } catch (error) {
+      this.handleError(
+        error,
+        "processing repository change",
+        ErrorType.REPOSITORY,
+        true
+      );
     }
   }
 
@@ -995,6 +1156,24 @@ Repository Path: ${repoPath}\n\n`;
   }
 
   /**
+   * Load configuration from workspace settings
+   * Emits configuration update event instead of direct UI updates
+   */
+  private loadConfiguration(): void {
+    const config = vscode.workspace.getConfiguration("commitTracker");
+    this.logFilePath = config.get<string>("logFilePath") || "";
+    this.logFile = config.get<string>("logFile") || "commit-tracker.log";
+    this.excludedBranches = config.get<string[]>("excludedBranches") || [];
+
+    // Emit config updated event
+    this.emit(RepositoryEvent.CONFIG_UPDATED, {
+      logFilePath: this.logFilePath,
+      logFile: this.logFile,
+      excludedBranches: this.excludedBranches,
+    });
+  }
+
+  /**
    * Update the configuration settings
    */
   public updateConfiguration(
@@ -1008,27 +1187,48 @@ Repository Path: ${repoPath}\n\n`;
   }
 
   /**
-   * Check for unpushed commits and emit events
+   * Check for unpushed commits and emit event instead of directly updating UI
    * @returns Result indicating if there are unpushed commits
    */
   public async checkUnpushedCommits(): Promise<Result<boolean, Error>> {
     try {
       if (!this.logFilePath) {
-        return failure(new Error("Log file path not configured"));
+        const error = new Error("Log file path is not configured");
+        this.handleError(
+          error,
+          "checking unpushed commits",
+          ErrorType.CONFIGURATION,
+          false
+        );
+        return failure(error);
       }
 
-      const hasUnpushedCommits = await this.gitService.hasUnpushedCommits(
+      // Use gitService to check for unpushed commits
+      const hasUnpushed = await this.gitService?.hasUnpushedCommits(
         this.logFilePath
       );
 
-      // Emit event with unpushed commits status
-      this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, hasUnpushedCommits);
+      // Emit event with unpushed status
+      this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, hasUnpushed);
 
-      return success(hasUnpushedCommits);
+      return success(hasUnpushed);
     } catch (error) {
-      this.emit(RepositoryEvent.ERROR, error);
+      this.handleError(
+        error,
+        "checking unpushed commits",
+        ErrorType.GIT_OPERATION,
+        true
+      );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Connect to GitService for repo operations
+   * @param gitService Service to perform git operations
+   */
+  public connectGitService(gitService: GitService): void {
+    this.gitService = gitService;
   }
 
   /**
