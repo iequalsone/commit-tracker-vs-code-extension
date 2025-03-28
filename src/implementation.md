@@ -75,7 +75,7 @@ Integration with Other Modules
 
 Phase 4: Service Refinement
 [x] Review and refine gitService
-<input disabled="" type="checkbox"> Ensure it has no UI dependencies
+[x] Ensure it has no UI dependencies
 <input disabled="" type="checkbox"> Make it fully injectable
 <input disabled="" type="checkbox"> Create any other needed services
 <input disabled="" type="checkbox"> Consider moving logging to its own service
