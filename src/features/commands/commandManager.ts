@@ -39,23 +39,54 @@ export class CommandManager implements vscode.Disposable {
     this.repositoryManager = repositoryManager;
   }
 
-  private setupRepositoryEventListeners(): void {
+  public setupRepositoryEventListeners(): void {
     if (this.repositoryManager) {
+      // Push requests from RepositoryManager
       this.repositoryManager.on(
         RepositoryEvent.PUSH_REQUESTED,
         this.handlePushRequest.bind(this)
       );
 
+      // Terminal operations requested by RepositoryManager
+      this.repositoryManager.on(
+        RepositoryEvent.TERMINAL_OPERATION_REQUESTED,
+        (workingDirectory: string, command: string, terminalName: string) => {
+          this.createGitOperationTerminal(
+            workingDirectory,
+            command,
+            terminalName
+          );
+        }
+      );
+
+      // Setup requests from RepositoryManager
+      this.repositoryManager.on(RepositoryEvent.SETUP_REQUESTED, async () => {
+        await this.setupTracker();
+      });
+
+      // Repository state requests
+      this.repositoryManager.on(
+        RepositoryEvent.REPOSITORY_INFO_REQUESTED,
+        () => {
+          this.showRepositoryStatus();
+        }
+      );
+
+      // Error handling
       this.repositoryManager.on(RepositoryEvent.ERROR, (error, operation) => {
         this.logService.error(
-          `Repository error during ${operation}: ${error.message}`
+          `Repository error in operation ${operation}: ${error}`
         );
-        // Only show notification for significant errors, not routine ones
-        if (
-          !operation.includes("already processed") &&
-          !operation.includes("Skipping")
-        ) {
-          vscode.window.showErrorMessage(`Error: ${error.message}`);
+
+        // Show error in notification based on error type
+        if (operation === "git" || operation === "push") {
+          vscode.window.showErrorMessage(`Git operation failed: ${error}`);
+        } else if (operation === "fileSystem") {
+          vscode.window.showErrorMessage(`File operation failed: ${error}`);
+        } else {
+          vscode.window.showErrorMessage(
+            `Repository operation failed: ${error}`
+          );
         }
       });
 
@@ -63,9 +94,13 @@ export class CommandManager implements vscode.Disposable {
       this.repositoryManager.on(
         RepositoryEvent.ERROR_GIT_OPERATION,
         (error) => {
-          vscode.window.showErrorMessage(
-            `Git error: ${error.message}. You may need to fix Git issues manually.`
-          );
+          vscode.window
+            .showErrorMessage(`Git error: ${error}`, "Check Git Status")
+            .then((selection) => {
+              if (selection === "Check Git Status") {
+                this.showRepositoryStatus();
+              }
+            });
         }
       );
     }
