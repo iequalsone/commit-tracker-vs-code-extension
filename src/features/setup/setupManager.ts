@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
+import { execSync } from "child_process";
 import { LogService } from "../../services/logService";
+import { RepositoryManager } from "../repository/repositoryManager";
+import { GitService } from "../../services/gitService";
 
 /**
  * Manages the extension setup process and configuration validation
@@ -7,10 +12,37 @@ import { LogService } from "../../services/logService";
 export class SetupManager {
   private readonly context: vscode.ExtensionContext;
   private readonly logService: LogService;
+  private repositoryManager?: RepositoryManager;
+  private gitService?: GitService;
 
-  constructor(context: vscode.ExtensionContext, logService: LogService) {
+  constructor(
+    context: vscode.ExtensionContext,
+    logService: LogService,
+    gitService?: GitService,
+    repositoryManager?: RepositoryManager
+  ) {
     this.context = context;
     this.logService = logService;
+    this.gitService = gitService;
+    this.repositoryManager = repositoryManager;
+  }
+
+  /**
+   * Connect to the repository manager after initialization
+   * @param repositoryManager The repository manager instance
+   */
+  public connectRepositoryManager(repositoryManager: RepositoryManager): void {
+    this.repositoryManager = repositoryManager;
+    this.logService.info("SetupManager connected to RepositoryManager");
+  }
+
+  /**
+   * Connect to the Git service for repository operations
+   * @param gitService The Git service instance
+   */
+  public connectGitService(gitService: GitService): void {
+    this.gitService = gitService;
+    this.logService.info("SetupManager connected to GitService");
   }
 
   /**
@@ -83,6 +115,15 @@ export class SetupManager {
         return false;
       }
 
+      // Initialize the repository (this is the new part)
+      const repoInitialized = await this.initializeRepository(folderPath);
+      if (!repoInitialized) {
+        vscode.window.showErrorMessage(
+          "Failed to initialize repository. Please try again."
+        );
+        return false;
+      }
+
       // Create default configuration
       const config = vscode.workspace.getConfiguration("commitTracker");
       await config.update("enabled", true, vscode.ConfigurationTarget.Global);
@@ -94,16 +135,6 @@ export class SetupManager {
       await config.update(
         "showNotifications",
         true,
-        vscode.ConfigurationTarget.Global
-      );
-      await config.update(
-        "logFilePath",
-        folderPath,
-        vscode.ConfigurationTarget.Global
-      );
-      await config.update(
-        "logFile",
-        "commit-tracker.log",
         vscode.ConfigurationTarget.Global
       );
 
@@ -190,6 +221,154 @@ export class SetupManager {
       return true;
     } catch (error) {
       this.logService.error(`Error verifying Git setup: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Initialize a repository for tracking
+   * @param folderPath Path to the repository folder
+   * @returns Promise resolving to true if initialization was successful
+   */
+  public async initializeRepository(folderPath: string): Promise<boolean> {
+    try {
+      this.logService.info(`Initializing repository at ${folderPath}`);
+
+      // Check if folder exists
+      if (!fs.existsSync(folderPath)) {
+        this.logService.error(`Folder does not exist: ${folderPath}`);
+        return false;
+      }
+
+      // Check if it's already a git repository
+      const isGitRepo = await this.verifyGitSetup(folderPath);
+
+      if (!isGitRepo) {
+        // Initialize git repository
+        await this.initializeGitRepo(folderPath);
+      }
+
+      // Create default log file if it doesn't exist
+      const logFile = path.join(folderPath, "commit-tracker.log");
+      if (!fs.existsSync(logFile)) {
+        fs.writeFileSync(logFile, "# Commit Tracker Log File\n\n", "utf8");
+        this.logService.info(`Created log file at ${logFile}`);
+      }
+
+      // Update configuration
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      await config.update(
+        "logFilePath",
+        folderPath,
+        vscode.ConfigurationTarget.Global
+      );
+      await config.update(
+        "logFile",
+        "commit-tracker.log",
+        vscode.ConfigurationTarget.Global
+      );
+
+      // If we have a repository manager, notify it of configuration changes
+      if (this.repositoryManager) {
+        this.repositoryManager.updateConfiguration(
+          folderPath,
+          "commit-tracker.log",
+          config.get<string[]>("excludedBranches") || []
+        );
+
+        // Reinitialize the repository manager
+        await this.repositoryManager.initialize();
+      }
+
+      return true;
+    } catch (error) {
+      this.logService.error(`Failed to initialize repository: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Initialize a Git repository with initial commit
+   * @param folderPath Path to initialize Git repository
+   * @returns Promise resolving to true if successful
+   */
+  public async initializeGitRepo(folderPath: string): Promise<boolean> {
+    try {
+      this.logService.info(`Initializing Git repository at ${folderPath}`);
+
+      // If GitService is available, use it
+      if (this.gitService) {
+        try {
+          await this.gitService.executeGitCommand(folderPath, "init");
+          await this.gitService.executeGitCommand(
+            folderPath,
+            'config user.name "Commit Tracker"'
+          );
+          await this.gitService.executeGitCommand(
+            folderPath,
+            'config user.email "commit.tracker@example.com"'
+          );
+
+          // Create initial file if needed
+          const readmePath = path.join(folderPath, "README.md");
+          if (!fs.existsSync(readmePath)) {
+            fs.writeFileSync(
+              readmePath,
+              "# Commit Tracker Repository\n\nThis repository tracks your commits across projects.\n",
+              "utf8"
+            );
+          }
+
+          await this.gitService.executeGitCommand(folderPath, "add .");
+          await this.gitService.executeGitCommand(
+            folderPath,
+            'commit -m "Initial commit for Commit Tracker"'
+          );
+
+          this.logService.info(
+            `Git repository successfully initialized at ${folderPath}`
+          );
+          return true;
+        } catch (error) {
+          this.logService.error(
+            `Error using GitService to initialize repository: ${error}`
+          );
+          // Fall back to terminal approach if GitService fails
+        }
+      }
+
+      // Fall back to terminal approach if GitService isn't available or failed
+      const terminal = vscode.window.createTerminal({
+        name: "Commit Tracker Setup",
+        cwd: folderPath,
+      });
+
+      terminal.show();
+      terminal.sendText("git init");
+      terminal.sendText('git config user.name "Commit Tracker"');
+      terminal.sendText('git config user.email "commit.tracker@example.com"');
+      terminal.sendText("touch README.md");
+      terminal.sendText('echo "# Commit Tracker Repository" > README.md');
+      terminal.sendText('echo "" >> README.md');
+      terminal.sendText(
+        'echo "This repository tracks your commits across projects." >> README.md'
+      );
+      terminal.sendText("git add README.md");
+      terminal.sendText('git commit -m "Initial commit for Commit Tracker"');
+      terminal.sendText("exit");
+
+      // Wait a bit for the terminal operations to complete
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      this.logService.info(
+        `Git repository initialized at ${folderPath} using terminal`
+      );
+      return true;
+    } catch (error) {
+      this.logService.error(`Error initializing Git repository: ${error}`);
+      vscode.window.showErrorMessage(
+        `Failed to initialize Git repository: ${error}`
+      );
       return false;
     }
   }
