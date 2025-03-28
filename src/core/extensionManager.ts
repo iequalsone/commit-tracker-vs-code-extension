@@ -119,6 +119,9 @@ export class ExtensionManager {
       this.statusManager
     );
 
+    // Connect GitService to RepositoryManager
+    this.repositoryManager.connectGitService(this.gitService);
+
     // Command manager initialization needs repositoryManager
     this.commandManager = new CommandManager(
       this.context,
