@@ -108,6 +108,7 @@ export class ExtensionManager {
   private async initializeExtension(): Promise<void> {
     // Initialize services first
     this.logService = new LogService();
+    this.logService.info("Extension initialization started");
 
     // Create workspace provider
     const workspaceProvider: IWorkspaceProvider = {
@@ -151,6 +152,9 @@ export class ExtensionManager {
       workspaceProvider,
       fileSystemService,
     });
+
+    // Initialize ErrorHandlingService with LogService
+    this.errorHandlingService = new ErrorHandlingService(this.logService);
 
     // Add a workspace provider
     this.gitService.setWorkspaceProvider(() => {
