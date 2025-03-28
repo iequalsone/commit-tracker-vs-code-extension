@@ -66,6 +66,10 @@
       {
         "command": "commit-tracker.resetSetup",
         "title": "Commit Tracker: Reset Setup Configuration"
+      },
+      {
+        "command": "commitTracker.manageCacheStatus",
+        "title": "Commit Tracker: Show Cache Status"
       }
     ],
     "configuration": {
