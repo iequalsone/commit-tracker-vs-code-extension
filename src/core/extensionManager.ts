@@ -4,7 +4,15 @@ import { StatusManager } from "../features/status/statusManager";
 import { CommandManager } from "../features/commands/commandManager";
 import { GitService } from "../services/gitService";
 import { LogService } from "../services/logService";
-import { RepositoryManager } from "../features/repository/repositoryManager";
+import {
+  RepositoryEvent,
+  RepositoryManager,
+} from "../features/repository/repositoryManager";
+import {
+  ErrorEvent,
+  ErrorHandlingService,
+  ErrorType,
+} from "../services/errorHandlingService";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -23,6 +31,7 @@ export class ExtensionManager {
   // Services
   private gitService: GitService;
   private logService: LogService;
+  private errorHandlingService: ErrorHandlingService;
 
   /**
    * Creates a new instance of the ExtensionManager
@@ -34,6 +43,7 @@ export class ExtensionManager {
     // Initialize services first (no dependencies)
     this.logService = new LogService();
     this.gitService = new GitService();
+    this.errorHandlingService = new ErrorHandlingService(this.logService);
 
     // Initialize managers (may depend on services)
     this.setupManager = new SetupManager(context, this.logService);
@@ -42,17 +52,26 @@ export class ExtensionManager {
       this.gitService,
       this.logService
     );
+    this.repositoryManager = new RepositoryManager(
+      context,
+      this.statusManager,
+      undefined, // CommandManager will be connected later
+      this.errorHandlingService
+    );
     this.commandManager = new CommandManager(
       context,
       this.gitService,
-      this.logService
+      this.logService,
+      this.setupManager,
+      this.statusManager,
+      this.repositoryManager
     );
-    this.repositoryManager = new RepositoryManager(context, this.statusManager);
 
     // Register disposables
     this.disposables.push(this.logService);
     this.disposables.push(this.statusManager);
     this.disposables.push(this.commandManager);
+    this.disposables.push(this.errorHandlingService);
   }
 
   /**
@@ -159,27 +178,57 @@ export class ExtensionManager {
     // Connect StatusManager to RepositoryManager events
     this.statusManager.connectToRepositoryManager(this.repositoryManager);
 
-    // Listen for repository errors in the extension manager
-    this.repositoryManager.on(RepositoryEvent.ERROR, (error, operation) => {
-      this.logService.error(
-        `Repository error during ${operation}: ${error.message}`
-      );
+    // Set up centralized error handling via the ErrorHandlingService
+    this.errorHandlingService.on(ErrorEvent.ERROR_OCCURRED, (errorDetails) => {
+      // Update status bar based on error type
+      switch (errorDetails.type) {
+        case ErrorType.CONFIGURATION:
+          this.statusManager.setErrorStatus("Config Error");
+          break;
+        case ErrorType.GIT_OPERATION:
+          this.statusManager.setErrorStatus("Git Error");
+          break;
+        case ErrorType.FILESYSTEM:
+          this.statusManager.setErrorStatus("File Error");
+          break;
+        case ErrorType.REPOSITORY:
+          this.statusManager.setErrorStatus("Repo Error");
+          break;
+        case ErrorType.NETWORK:
+          this.statusManager.setErrorStatus("Network Error");
+          break;
+        default:
+          this.statusManager.setErrorStatus("Error");
+      }
     });
 
-    // Listen for specific error types
-    this.repositoryManager.on(RepositoryEvent.ERROR_CONFIGURATION, (error) => {
-      this.logService.error(`Configuration error: ${error.message}`);
-      this.statusManager.setErrorStatus("Config Error");
+    this.errorHandlingService.on(ErrorEvent.ERROR_RESOLVED, () => {
+      // Restore normal status when errors are resolved
+      this.statusManager.setTrackingStatus();
     });
 
-    this.repositoryManager.on(RepositoryEvent.ERROR_GIT_OPERATION, (error) => {
-      this.logService.error(`Git operation error: ${error.message}`);
-      this.statusManager.setErrorStatus("Git Error");
-    });
-
-    this.repositoryManager.on(RepositoryEvent.ERROR_FILESYSTEM, (error) => {
-      this.logService.error(`File system error: ${error.message}`);
-      this.statusManager.setErrorStatus("File Error");
+    // Handle suggestion selections
+    this.errorHandlingService.on("suggestion-selected", (suggestion) => {
+      switch (suggestion) {
+        case "Open Settings":
+          vscode.commands.executeCommand("commitTracker.openSettings");
+          break;
+        case "Run Setup Wizard":
+          vscode.commands.executeCommand("commitTracker.setupTracker");
+          break;
+        case "Check Git Installation":
+          vscode.window.showInformationMessage(
+            "Checking your Git installation..."
+          );
+          // Additional action could be added here
+          break;
+        case "Open Terminal":
+          vscode.commands.executeCommand("workbench.action.terminal.new");
+          break;
+        case "Refresh Status":
+          vscode.commands.executeCommand("commitTracker.refresh");
+          break;
+      }
     });
 
     // Listen for configuration updates
