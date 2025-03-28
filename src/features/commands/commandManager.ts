@@ -141,6 +141,11 @@ sleep 5
   public registerCommands(): void {
     this.logService.info("Registering extension commands");
 
+    this.registerCommand(
+      "commitTracker.manageCacheStatus",
+      this.manageCacheStatus.bind(this)
+    );
+
     // Core commands
     this.registerCommand(
       "commitTracker.showDetails",
@@ -215,6 +220,111 @@ sleep 5
     const disposable = vscode.commands.registerCommand(commandId, handler);
     this.disposables.push(disposable);
     this.context.subscriptions.push(disposable);
+  }
+
+  /**
+   * Command handler: Manage cache status
+   */
+  private async manageCacheStatus(): Promise<void> {
+    try {
+      this.logService.showOutput(false);
+      this.logService.info("=== CACHE STATUS ===");
+
+      if (!this.repositoryManager) {
+        vscode.window.showErrorMessage("Repository manager not initialized");
+        return;
+      }
+
+      const cacheStatus = this.repositoryManager.getCacheStatus();
+
+      if (cacheStatus.isFailure()) {
+        this.logService.error(
+          `Failed to get cache status: ${cacheStatus.error.message}`
+        );
+        vscode.window.showErrorMessage(
+          `Failed to get cache status: ${cacheStatus.error.message}`
+        );
+        return;
+      }
+
+      const status = cacheStatus.value;
+
+      this.logService.info(
+        `Last processed commit: ${status.lastProcessedCommit || "none"}`
+      );
+      this.logService.info(
+        `Repositories tracked: ${status.repositoriesTracked}`
+      );
+      this.logService.info(`Cache created: ${status.cacheCreated}`);
+      this.logService.info(
+        `Cache last updated: ${status.cacheLastUpdated || "never"}`
+      );
+      this.logService.info(
+        `Repository status entries: ${status.cacheSizes.repositoryStatus}`
+      );
+      this.logService.info(
+        `Commit history cached: ${
+          status.cacheSizes.commitHistory ? "Yes" : "No"
+        }`
+      );
+      this.logService.info(
+        `Statistics cached: ${status.cacheSizes.statistics ? "Yes" : "No"}`
+      );
+      this.logService.info(
+        `Unpushed commits cached: ${
+          status.cacheSizes.unpushedCommits ? "Yes" : "No"
+        }`
+      );
+
+      // Ask user if they want to clear cache
+      const action = await vscode.window.showQuickPick(
+        [
+          "View Cache Status Only",
+          "Clear Repository Status Cache",
+          "Clear Commit History Cache",
+          "Clear Statistics Cache",
+          "Clear Unpushed Commits Cache",
+          "Clear All Caches",
+        ],
+        { placeHolder: "Select action" }
+      );
+
+      if (!action || action === "View Cache Status Only") {
+        return;
+      }
+
+      switch (action) {
+        case "Clear Repository Status Cache":
+          this.repositoryManager.invalidateCache("repositoryStatus");
+          vscode.window.showInformationMessage(
+            "Repository status cache cleared"
+          );
+          break;
+        case "Clear Commit History Cache":
+          this.repositoryManager.invalidateCache("commitHistory");
+          vscode.window.showInformationMessage("Commit history cache cleared");
+          break;
+        case "Clear Statistics Cache":
+          this.repositoryManager.invalidateCache("statistics");
+          vscode.window.showInformationMessage("Statistics cache cleared");
+          break;
+        case "Clear Unpushed Commits Cache":
+          this.repositoryManager.invalidateCache("unpushedCommits");
+          vscode.window.showInformationMessage(
+            "Unpushed commits cache cleared"
+          );
+          break;
+        case "Clear All Caches":
+          this.repositoryManager.invalidateCache();
+          vscode.window.showInformationMessage("All caches cleared");
+          break;
+      }
+
+      this.logService.info("=== END CACHE STATUS ===");
+    } catch (error) {
+      this.logService.error(`Error managing cache: ${error}`);
+      vscode.window.showErrorMessage(`Error managing cache: ${error}`);
+    }
   }
 
   /**
