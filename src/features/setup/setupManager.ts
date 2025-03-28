@@ -1,23 +1,22 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { execSync } from "child_process";
-import { LogService } from "../../services/logService";
 import { RepositoryManager } from "../repository/repositoryManager";
 import { GitService } from "../../services/gitService";
+import { ILogService } from "../../services/interfaces/ILogService";
 
 /**
  * Manages the extension setup process and configuration validation
  */
 export class SetupManager {
   private readonly context: vscode.ExtensionContext;
-  private readonly logService: LogService;
+  private readonly logService: ILogService;
   private repositoryManager?: RepositoryManager;
   private gitService?: GitService;
 
   constructor(
     context: vscode.ExtensionContext,
-    logService: LogService,
+    logService: ILogService,
     gitService?: GitService,
     repositoryManager?: RepositoryManager
   ) {
