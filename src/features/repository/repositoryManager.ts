@@ -1669,32 +1669,35 @@ Repository Path: ${commit.repoPath}\n\n`;
    * Emits configuration update event instead of direct UI updates
    */
   private loadConfiguration(): void {
-    if (this.configurationService) {
+    if (!this.configurationService) {
+      // Fall back to direct loading if configurationService is not available
+      const config = vscode.workspace.getConfiguration("commitTracker");
+      this.logFilePath = config.get<string>("logFilePath", "");
+      this.logFile = config.get<string>("logFile", "commit-tracker.log");
+      this.excludedBranches = config.get<string[]>("excludedBranches", []);
+    } else {
+      // Use configurationService
       this.logFilePath = this.configurationService.getTrackerRepoPath() || "";
-      this.logFile = this.configurationService.getTrackerLogFile() || "";
+      this.logFile =
+        this.configurationService.getTrackerLogFile() || "commit-tracker.log";
       this.excludedBranches = this.configurationService.getExcludedBranches();
-
-      // Emit configuration update event
-      this.emit(RepositoryEvent.CONFIG_UPDATED, {
-        logFilePath: this.logFilePath,
-        logFile: this.logFile,
-        excludedBranches: this.excludedBranches,
-      });
-
-      return;
     }
 
-    // Legacy implementation
-    const config = vscode.workspace.getConfiguration("commitTracker");
-    this.logFilePath = config.get<string>("logFilePath") || "";
-    this.logFile = config.get<string>("logFile") || "";
-    this.excludedBranches = config.get<string[]>("excludedBranches") || [];
-
+    // Emit configuration update event
     this.emit(RepositoryEvent.CONFIG_UPDATED, {
       logFilePath: this.logFilePath,
       logFile: this.logFile,
       excludedBranches: this.excludedBranches,
     });
+
+    if (this.logService) {
+      this.logService.info(
+        `Configuration loaded - Log path: ${this.logFilePath}, Log file: ${this.logFile}`
+      );
+      this.logService.debug(
+        `Excluded branches: ${JSON.stringify(this.excludedBranches)}`
+      );
+    }
   }
 
   /**
