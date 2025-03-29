@@ -263,25 +263,46 @@ export class SetupManager {
         this.logService.info(`Created log file at ${logFile}`);
       }
 
-      // Update configuration
-      const config = vscode.workspace.getConfiguration("commitTracker");
-      await config.update(
-        "logFilePath",
-        folderPath,
-        vscode.ConfigurationTarget.Global
-      );
-      await config.update(
-        "logFile",
-        "commit-tracker.log",
-        vscode.ConfigurationTarget.Global
-      );
+      // Update configuration - use ConfigurationService if available
+      if (this.configurationService) {
+        const result = await this.configurationService.setTrackerRepo(
+          folderPath,
+          "commit-tracker.log"
+        );
+
+        if (result.isFailure()) {
+          this.logService.error(
+            `Failed to set tracker repository: ${result.error}`
+          );
+          return false;
+        }
+      } else {
+        // Fall back to direct configuration update
+        const config = vscode.workspace.getConfiguration("commitTracker");
+        await config.update(
+          "logFilePath",
+          folderPath,
+          vscode.ConfigurationTarget.Global
+        );
+        await config.update(
+          "logFile",
+          "commit-tracker.log",
+          vscode.ConfigurationTarget.Global
+        );
+      }
 
       // If we have a repository manager, notify it of configuration changes
       if (this.repositoryManager) {
+        const excludedBranches = this.configurationService
+          ? this.configurationService.getExcludedBranches()
+          : vscode.workspace
+              .getConfiguration("commitTracker")
+              .get<string[]>("excludedBranches") || [];
+
         this.repositoryManager.updateConfiguration(
           folderPath,
           "commit-tracker.log",
-          config.get<string[]>("excludedBranches") || []
+          excludedBranches
         );
 
         // Reinitialize the repository manager
