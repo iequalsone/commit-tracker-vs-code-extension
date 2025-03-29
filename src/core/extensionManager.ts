@@ -131,6 +131,10 @@ export class ExtensionManager {
         // Handle enabled state change
         if (change.newValue && this.repositoryManager) {
           this.repositoryManager.initialize();
+        } else if (!change.newValue && this.repositoryManager) {
+          // If disabled, update status bar
+          this.statusManager?.setStoppedStatus();
+          this.logService.info("Commit tracking disabled");
         }
       } else if (
         change.key === "updateFrequencyMinutes" &&
@@ -138,6 +142,18 @@ export class ExtensionManager {
       ) {
         // Update status refresh interval
         this.statusManager.startStatusUpdateInterval();
+        this.logService.info(
+          `Update frequency changed to ${change.newValue} minutes`
+        );
+      } else if (change.key === "logFilePath" || change.key === "logFile") {
+        // Repository path or log file changed, need to reinitialize repository manager
+        this.logService.info(`Log file configuration changed: ${change.key}`);
+        if (
+          this.repositoryManager &&
+          this.configurationService?.isConfigured()
+        ) {
+          this.repositoryManager.initialize();
+        }
       }
     });
 
