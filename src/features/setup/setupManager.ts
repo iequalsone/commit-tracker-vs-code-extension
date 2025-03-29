@@ -4,6 +4,7 @@ import * as path from "path";
 import { RepositoryManager } from "../repository/repositoryManager";
 import { GitService } from "../../services/gitService";
 import { ILogService } from "../../services/interfaces/ILogService";
+import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
 
 /**
  * Manages the extension setup process and configuration validation
@@ -11,17 +12,20 @@ import { ILogService } from "../../services/interfaces/ILogService";
 export class SetupManager {
   private readonly context: vscode.ExtensionContext;
   private readonly logService: ILogService;
-  private repositoryManager?: RepositoryManager;
+  private readonly configurationService?: IConfigurationService;
   private gitService?: GitService;
+  private repositoryManager?: RepositoryManager;
 
   constructor(
     context: vscode.ExtensionContext,
     logService: ILogService,
+    configurationService?: IConfigurationService,
     gitService?: GitService,
     repositoryManager?: RepositoryManager
   ) {
     this.context = context;
     this.logService = logService;
+    this.configurationService = configurationService;
     this.gitService = gitService;
     this.repositoryManager = repositoryManager;
   }
@@ -51,6 +55,11 @@ export class SetupManager {
   public validateConfiguration(): boolean {
     this.logService.info("Validating configuration");
 
+    if (this.configurationService) {
+      return this.configurationService.isConfigured();
+    }
+
+    // Legacy implementation if configurationService isn't provided
     const config = vscode.workspace.getConfiguration("commitTracker");
 
     // Required settings validation
