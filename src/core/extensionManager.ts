@@ -15,9 +15,10 @@ import {
 } from "../services/errorHandlingService";
 
 import { ITerminalProvider } from "../services/interfaces/ITerminalProvider";
-import { ILogService } from "../services/interfaces/ILogService";
 import { IWorkspaceProvider } from "../services/interfaces/IWorkspaceProvider";
 import { IFileSystemService } from "../services/interfaces/IFileSystemService";
+import { ConfigurationService } from "../services/configurationService";
+import { IConfigurationService } from "../services/interfaces/IConfigurationService";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -37,6 +38,7 @@ export class ExtensionManager {
   private gitService: GitService;
   private logService: LogService;
   private errorHandlingService: ErrorHandlingService;
+  private configurationService: IConfigurationService;
 
   /**
    * Creates a new instance of the ExtensionManager
@@ -47,6 +49,10 @@ export class ExtensionManager {
 
     // Initialize services first (no dependencies)
     this.logService = new LogService();
+    this.configurationService = new ConfigurationService(
+      "commitTracker",
+      this.logService
+    );
     this.gitService = new GitService();
     this.errorHandlingService = new ErrorHandlingService(this.logService);
 
@@ -109,6 +115,31 @@ export class ExtensionManager {
     // Initialize services first
     this.logService = new LogService();
     this.logService.info("Extension initialization started");
+
+    // Initialize ConfigurationService
+    this.configurationService = new ConfigurationService(
+      "commitTracker",
+      this.logService
+    );
+
+    // Subscribe to configuration changes
+    this.configurationService.onDidChangeConfiguration((change) => {
+      this.logService.info(`Configuration changed: ${change.key}`);
+
+      // Special handling for specific settings
+      if (change.key === "enabled") {
+        // Handle enabled state change
+        if (change.newValue && this.repositoryManager) {
+          this.repositoryManager.initialize();
+        }
+      } else if (
+        change.key === "updateFrequencyMinutes" &&
+        this.statusManager
+      ) {
+        // Update status refresh interval
+        this.statusManager.startStatusUpdateInterval();
+      }
+    });
 
     // Create workspace provider
     const workspaceProvider: IWorkspaceProvider = {
@@ -177,13 +208,18 @@ export class ExtensionManager {
     this.setupManager = new SetupManager(
       this.context,
       this.logService,
+      this.configurationService,
       this.gitService
     );
 
-    // Initialize RepositoryManager with StatusManager
     this.repositoryManager = new RepositoryManager(
       this.context,
-      this.statusManager
+      this.statusManager,
+      undefined,
+      this.errorHandlingService,
+      this.gitService,
+      this.configurationService,
+      this.logService
     );
 
     // Connect GitService to RepositoryManager
@@ -209,11 +245,12 @@ export class ExtensionManager {
     this.commandManager.setupRepositoryEventListeners();
     this.repositoryManager.connectCommandManager(this.commandManager);
 
-    // Initialize repository manager after setup check
-    const isConfigured = this.setupManager.validateConfiguration();
+    // When checking configuration validity, use configurationService
+    const isConfigured = this.configurationService.isConfigured();
 
     // Only initialize the repository manager if configuration is valid
     if (isConfigured) {
+      // Pass configurationService to repository manager
       const repoInitResult = await this.repositoryManager.initialize();
 
       if (repoInitResult.isFailure()) {
@@ -348,17 +385,25 @@ export class ExtensionManager {
    * Registers event listeners for configuration changes, git events, etc.
    */
   private registerEventListeners(): void {
-    // Register for configuration changes
-    const configDisposable = vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("commitTracker")) {
-        this.logService.info("Configuration changed, updating components...");
-        this.setupManager.validateConfiguration();
-        this.statusManager.updateStatus();
-      }
-    });
+    // If using ConfigurationService directly, we don't need this listener anymore
+    // But we'll keep it with a check for backward compatibility
+    if (!this.configurationService) {
+      // Register for configuration changes
+      const configDisposable = vscode.workspace.onDidChangeConfiguration(
+        (e) => {
+          if (e.affectsConfiguration("commitTracker")) {
+            this.logService.info(
+              "Configuration changed, updating components..."
+            );
+            this.setupManager.validateConfiguration();
+            this.statusManager.updateStatus();
+          }
+        }
+      );
 
-    // Add to disposables for cleanup
-    this.disposables.push(configDisposable);
+      // Add to disposables for cleanup
+      this.disposables.push(configDisposable);
+    }
 
     // Additional event listeners can be added here
   }
