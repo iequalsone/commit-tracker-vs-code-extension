@@ -2,12 +2,28 @@ import * as vscode from "vscode";
 import { Result } from "../../utils/results";
 
 /**
- * Configuration change event properties
+ * Configuration change event data
  */
 export interface ConfigurationChangeEvent {
+  /**
+   * The configuration key that changed
+   */
   key: string;
+
+  /**
+   * The old value before the change
+   */
   oldValue: any;
+
+  /**
+   * The new value after the change
+   */
   newValue: any;
+
+  /**
+   * Whether this was a global or workspace-specific change
+   */
+  scope: "global" | "workspace";
 }
 
 /**
@@ -17,7 +33,7 @@ export interface IConfigurationService {
   /**
    * Event emitted when configuration changes
    */
-  onDidChangeConfiguration: vscode.Event<ConfigurationChangeEvent>;
+  readonly onDidChangeConfiguration: vscode.Event<ConfigurationChangeEvent>;
 
   /**
    * Get a configuration value
@@ -39,7 +55,7 @@ export interface IConfigurationService {
   ): Promise<void>;
 
   /**
-   * Check if a particular configuration has been changed
+   * Check if a configuration setting has been changed
    * @param event VS Code configuration change event
    * @param section Configuration setting to check
    */
@@ -47,6 +63,12 @@ export interface IConfigurationService {
     event: vscode.ConfigurationChangeEvent,
     section: string
   ): boolean;
+
+  /**
+   * Check if the extension is properly configured
+   * @returns True if the extension is configured, false otherwise
+   */
+  isConfigured(): boolean;
 
   /**
    * Validate required configuration settings
@@ -189,4 +211,15 @@ export interface IConfigurationService {
    * @returns True if path is a valid git repository, false otherwise
    */
   validateGitRepository(repoPathKey: string): boolean;
+
+  /**
+   * Register a listener for changes to a specific configuration key
+   * @param key The configuration key to watch
+   * @param callback Function to call when the key changes
+   * @returns Disposable that can be used to remove the listener
+   */
+  onDidChangeConfigurationValue<T>(
+    key: string,
+    callback: (newValue: T, oldValue: T) => void
+  ): vscode.Disposable;
 }
