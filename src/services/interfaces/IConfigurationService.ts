@@ -143,4 +143,50 @@ export interface IConfigurationService {
    * @returns Object containing all configuration values
    */
   getAllSettings(): Record<string, any>;
+
+  /**
+   * Validate a specific configuration setting using a custom validator
+   * @param key Configuration key to validate
+   * @param validator Function to validate the value
+   * @returns True if valid, false otherwise
+   */
+  validateSetting<T>(key: string, validator: (value: T) => boolean): boolean;
+
+  /**
+   * Validate required configuration settings
+   * @param requiredSettings Array of required setting keys
+   * @returns True if all required settings are valid, false otherwise
+   */
+  validateRequiredSettings(requiredSettings: string[]): boolean;
+
+  /**
+   * Validate that a path exists and is accessible
+   * @param pathKey Configuration key for the path setting
+   * @returns True if path is valid and accessible, false otherwise
+   */
+  validatePath(pathKey: string): boolean;
+
+  /**
+   * Validate numeric range
+   * @param key Configuration key for the numeric setting
+   * @param min Minimum allowed value (inclusive)
+   * @param max Maximum allowed value (inclusive)
+   * @returns True if value is within range, false otherwise
+   */
+  validateNumericRange(key: string, min: number, max: number): boolean;
+
+  /**
+   * Validate array values against allowed options
+   * @param key Configuration key for the array setting
+   * @param allowedValues Array of allowed values
+   * @returns True if all values in the array are allowed, false otherwise
+   */
+  validateArrayValues<T>(key: string, allowedValues: T[]): boolean;
+
+  /**
+   * Validate git repository configuration
+   * @param repoPathKey Configuration key for the repository path
+   * @returns True if path is a valid git repository, false otherwise
+   */
+  validateGitRepository(repoPathKey: string): boolean;
 }
