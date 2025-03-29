@@ -8,6 +8,7 @@ import {
 } from "../repository/repositoryManager";
 import path from "path";
 import { IStatusManager } from "./statusManagerInterface";
+import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
 
 /**
  * Manages the status bar item and displays current tracking state
@@ -17,17 +18,21 @@ export class StatusManager implements vscode.Disposable {
   private readonly context: vscode.ExtensionContext;
   private readonly gitService: GitService;
   private readonly logService: LogService;
+  private readonly configurationService?: IConfigurationService;
   private updateInterval: NodeJS.Timeout | null = null;
+  private disposables: vscode.Disposable[] = [];
 
   constructor(
     context: vscode.ExtensionContext,
     gitService: GitService,
     logService: LogService,
-    repositoryManager?: RepositoryManager
+    repositoryManager?: RepositoryManager,
+    configurationService?: IConfigurationService
   ) {
     this.context = context;
     this.gitService = gitService;
     this.logService = logService;
+    this.configurationService = configurationService;
 
     // Create status bar item
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -40,6 +45,50 @@ export class StatusManager implements vscode.Disposable {
     if (repositoryManager) {
       this.connectToRepositoryManager(repositoryManager);
     }
+
+    // Listen for configuration changes if service is provided
+    if (configurationService) {
+      this.registerConfigurationListeners(configurationService);
+    }
+  }
+
+  /**
+   * Register configuration change listeners
+   * @param configService The configuration service
+   */
+  private registerConfigurationListeners(
+    configService: IConfigurationService
+  ): void {
+    this.logService.info(
+      "Registering configuration listeners for StatusManager"
+    );
+
+    // Listen for update frequency changes
+    this.disposables.push(
+      configService.onDidChangeConfigurationValue<number>(
+        "updateFrequencyMinutes",
+        (newValue) => {
+          this.logService.info(
+            `Update frequency changed to ${newValue} minutes`
+          );
+          this.startStatusUpdateInterval();
+        }
+      )
+    );
+
+    // Listen for enabled state changes
+    this.disposables.push(
+      configService.onDidChangeConfigurationValue<boolean>(
+        "enabled",
+        (newValue) => {
+          if (newValue) {
+            this.setTrackingStatus();
+          } else {
+            this.setStoppedStatus();
+          }
+        }
+      )
+    );
   }
 
   /**
