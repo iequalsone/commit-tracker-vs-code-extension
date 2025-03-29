@@ -19,6 +19,7 @@ import {
   ErrorType,
 } from "../../services/errorHandlingService";
 import { ILogService } from "../../services/interfaces/ILogService";
+import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
 
 /**
  * Repository status information
@@ -97,6 +98,7 @@ export class RepositoryManager extends EventEmitter {
   private commandManager: CommandManager | undefined;
   private errorHandlingService: ErrorHandlingService;
   private gitService: GitService | undefined;
+  private configurationService?: IConfigurationService;
   private logService?: ILogService;
 
   private cache: {
@@ -150,6 +152,7 @@ export class RepositoryManager extends EventEmitter {
     commandManager?: CommandManager,
     errorHandlingService?: ErrorHandlingService,
     gitService?: GitService,
+    configurationService?: IConfigurationService,
     logService?: ILogService
   ) {
     super();
@@ -157,6 +160,7 @@ export class RepositoryManager extends EventEmitter {
     this.statusManager = statusManager;
     this.commandManager = commandManager;
     this.gitService = gitService;
+    this.configurationService = configurationService;
     this.logService = logService;
     this.disposableManager = DisposableManager.getInstance();
     this.lastProcessedCommit = context.globalState.get(
@@ -1628,27 +1632,33 @@ Repository Path: ${commit.repoPath}\n\n`;
   }
 
   private setupConfigChangeListener(): void {
-    const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration("commitTracker")) {
-        const updatedConfig =
-          vscode.workspace.getConfiguration("commitTracker");
-        this.logFilePath = updatedConfig.get<string>("logFilePath")!;
-        this.logFile = updatedConfig.get<string>("logFile")!;
-        this.excludedBranches =
-          updatedConfig.get<string[]>("excludedBranches")!;
+    // If ConfigurationService is available, use its event
+    if (this.configurationService) {
+      const disposable = this.configurationService.onDidChangeConfiguration(
+        (change) => {
+          if (
+            change.key === "logFilePath" ||
+            change.key === "logFile" ||
+            change.key === "excludedBranches"
+          ) {
+            this.loadConfiguration();
+          }
+        }
+      );
 
-        // Emit configuration updated event with the new values
-        this.emit(RepositoryEvent.CONFIG_UPDATED, {
-          logFilePath: this.logFilePath,
-          logFile: this.logFile,
-          excludedBranches: this.excludedBranches,
-        });
+      this.disposableManager.register(disposable);
+      return;
+    }
 
-        this.logService?.info("Configuration updated");
+    // Legacy approach if ConfigurationService isn't provided
+    const configListener = vscode.workspace.onDidChangeConfiguration(
+      async (e) => {
+        if (e.affectsConfiguration("commitTracker")) {
+          this.loadConfiguration();
+        }
       }
-    });
+    );
 
-    this.context.subscriptions.push(configListener);
     this.disposableManager.register({
       dispose: () => configListener.dispose(),
     });
@@ -1659,29 +1669,32 @@ Repository Path: ${commit.repoPath}\n\n`;
    * Emits configuration update event instead of direct UI updates
    */
   private loadConfiguration(): void {
+    if (this.configurationService) {
+      this.logFilePath = this.configurationService.getTrackerRepoPath() || "";
+      this.logFile = this.configurationService.getTrackerLogFile() || "";
+      this.excludedBranches = this.configurationService.getExcludedBranches();
+
+      // Emit configuration update event
+      this.emit(RepositoryEvent.CONFIG_UPDATED, {
+        logFilePath: this.logFilePath,
+        logFile: this.logFile,
+        excludedBranches: this.excludedBranches,
+      });
+
+      return;
+    }
+
+    // Legacy implementation
     const config = vscode.workspace.getConfiguration("commitTracker");
     this.logFilePath = config.get<string>("logFilePath") || "";
-    this.logFile = config.get<string>("logFile") || "commit-tracker.log";
+    this.logFile = config.get<string>("logFile") || "";
     this.excludedBranches = config.get<string[]>("excludedBranches") || [];
 
-    // Emit config updated event
     this.emit(RepositoryEvent.CONFIG_UPDATED, {
       logFilePath: this.logFilePath,
       logFile: this.logFile,
       excludedBranches: this.excludedBranches,
     });
-
-    // Add this status update
-    const configValid = !!this.logFilePath && !!this.logFile;
-    if (configValid) {
-      this.notifyNormalStatus();
-    } else {
-      this.emit(RepositoryEvent.STATUS_UPDATE, {
-        type: "warning",
-        message: "Configuration incomplete",
-        details: "Setup needed for CommitTracker",
-      });
-    }
   }
 
   /**
