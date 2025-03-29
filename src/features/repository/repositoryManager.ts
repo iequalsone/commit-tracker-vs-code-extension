@@ -1,19 +1,12 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
-import {
-  getCommitAuthorDetails,
-  getCommitMessage,
-  getRepoNameFromRemote,
-  GitService,
-  pullChanges,
-} from "../../services/gitService";
+import { GitService } from "../../services/gitService";
 import {
   ensureDirectoryExists,
   appendToFile,
   validatePath,
 } from "../../services/fileService";
-import { logInfo, logError } from "../../utils/logger";
 import { debounce } from "../../utils/debounce";
 import { DisposableManager } from "../../utils/DisposableManager";
 import { Result, success, failure } from "../../utils/results";
@@ -367,14 +360,16 @@ export class RepositoryManager extends EventEmitter {
    */
   public async initialize(): Promise<Result<boolean, Error>> {
     try {
-      logInfo("Initializing repository manager");
+      this.logService?.info("Initializing repository manager");
 
       // Emit event before initialization starts
       this.emit(RepositoryEvent.TRACKING_STARTED);
 
       try {
-        await pullChanges(this.logFilePath);
-        logInfo("Successfully pulled latest changes from tracking repository");
+        await this.gitService?.pullChanges(this.logFilePath);
+        this.logService?.info(
+          "Successfully pulled latest changes from tracking repository"
+        );
       } catch (err) {
         this.handleError(
           err,
@@ -402,7 +397,9 @@ export class RepositoryManager extends EventEmitter {
         return failure(new Error("Failed to get Git API"));
       }
 
-      logInfo("Git API available, setting up repository listeners");
+      this.logService?.info(
+        "Git API available, setting up repository listeners"
+      );
 
       // Set up monitoring methods
       const listenersResult = this.setupRepositoryListeners(api);
@@ -416,21 +413,23 @@ export class RepositoryManager extends EventEmitter {
       }
 
       // Process current commits immediately
-      logInfo("Processing current repository states");
+      this.logService?.info("Processing current repository states");
       try {
         const repos = api.repositories;
         for (const repo of repos) {
           if (repo.state.HEAD?.commit) {
             const result = await this.updateRepositoryStatus(repo);
             if (result.isFailure()) {
-              logError(
+              this.logService?.error(
                 `Error updating repository status: ${result.error.message}`
               );
             }
           }
         }
       } catch (error) {
-        logError(`Error processing current repositories: ${error}`);
+        this.logService?.error(
+          `Error processing current repositories: ${error}`
+        );
       }
 
       // Emit event after successful initialization
@@ -509,19 +508,21 @@ export class RepositoryManager extends EventEmitter {
           }
         }
       } catch (error) {
-        logError(`Error checking log file: ${error}`);
+        this.logService?.error(`Error checking log file: ${error}`);
       }
 
       // Get commit details
-      const message = await getCommitMessage(repoPath, commitHash);
-      const author = await getCommitAuthorDetails(repoPath, commitHash);
+      const message =
+        (await this.gitService?.getCommitMessage(repoPath, commitHash)) ||
+        "No commit message";
+      const author =
+        (await this.gitService?.getCommitAuthorDetails(repoPath, commitHash)) ||
+        "Unknown author";
       const date = new Date().toISOString();
 
-      try {
-        repoName = await getRepoNameFromRemote(repoPath);
-      } catch (error) {
-        repoName = path.basename(repoPath);
-      }
+      repoName =
+        (await this.gitService?.getRepoNameFromRemote(repoPath)) ??
+        path.basename(repoPath);
 
       const commit: Commit = {
         hash: commitHash,
@@ -588,7 +589,7 @@ Repository Path: ${commit.repoPath}\n\n`;
     branch: string
   ): Promise<Result<string, Error>> {
     try {
-      logInfo(
+      this.logService?.info(
         `Logging commit details for ${headCommit} in ${repoPath} on branch ${branch}`
       );
 
@@ -609,7 +610,7 @@ Repository Path: ${commit.repoPath}\n\n`;
         repoName = await this.gitService?.getRepoNameFromRemote(repoPath);
       } catch (error) {
         repoName = path.basename(repoPath);
-        logInfo(`Using directory name as repo name: ${repoName}`);
+        this.logService?.info(`Using directory name as repo name: ${repoName}`);
       }
 
       // Create log message
@@ -627,21 +628,23 @@ Repository Path: ${commit.repoPath}\n\n`;
       const logFile = config.get<string>("logFile") || "commit-tracker.log";
       const trackingFilePath = path.join(logFilePath, logFile);
 
-      logInfo(`Writing log to: ${trackingFilePath}`);
+      this.logService?.info(`Writing log to: ${trackingFilePath}`);
 
       try {
         if (!validatePath(trackingFilePath)) {
           throw new Error("Invalid tracking file path.");
         }
         ensureDirectoryExists(path.dirname(trackingFilePath));
-        logInfo(`Ensured directory exists: ${logFilePath}`);
+        this.logService?.info(`Ensured directory exists: ${logFilePath}`);
       } catch (err) {
         return failure(new Error(`Failed to ensure directory exists: ${err}`));
       }
 
       try {
         await appendToFile(trackingFilePath, logMessage);
-        logInfo(`Successfully logged commit details to ${logFile}`);
+        this.logService?.info(
+          `Successfully logged commit details to ${logFile}`
+        );
       } catch (err) {
         return failure(new Error(`Failed to write to ${logFile}: ${err}`));
       }
@@ -682,7 +685,7 @@ Repository Path: ${commit.repoPath}\n\n`;
     commitHash: string,
     branch: string
   ): Promise<Result<Commit, Error>> {
-    logInfo(
+    this.logService?.info(
       `Directly processing commit ${commitHash} in ${repoPath} on branch ${branch}`
     );
 
@@ -700,10 +703,9 @@ Repository Path: ${commit.repoPath}\n\n`;
       }
 
       // Get commit details using the GitService
-      const message = await this.gitService.getCommitMessage(
-        repoPath,
-        commitHash
-      );
+      const message =
+        (await this.gitService.getCommitMessage(repoPath, commitHash)) ||
+        "No commit message";
       const author = await this.gitService.getCommitAuthorDetails(
         repoPath,
         commitHash
@@ -759,7 +761,7 @@ Repository Path: ${commit.repoPath}\n\n`;
     repo: any
   ): Promise<Result<Commit, Error>> {
     try {
-      logInfo("Manually processing repository");
+      this.logService?.info("Manually processing repository");
 
       if (!repo) {
         return failure(new Error("Repository object is null or undefined"));
@@ -777,7 +779,7 @@ Repository Path: ${commit.repoPath}\n\n`;
       const branch = repo.state.HEAD?.name;
       const repoPath = repo.rootUri.fsPath;
 
-      logInfo(
+      this.logService?.info(
         `Repository info - Path: ${repoPath || "unknown"}, Commit: ${
           headCommit || "unknown"
         }, Branch: ${branch || "unknown"}`
@@ -1245,7 +1247,9 @@ Repository Path: ${commit.repoPath}\n\n`;
   }
 
   // Replace the existing getRepositoryStatus with this cached version
-  public getRepositoryStatus(repo: any): Result<RepositoryStatus, Error> {
+  public async getRepositoryStatus(
+    repo: any
+  ): Promise<Result<RepositoryStatus, Error>> {
     try {
       const repoPath = repo.rootUri?.fsPath;
       if (!repoPath) {
@@ -1271,7 +1275,14 @@ Repository Path: ${commit.repoPath}\n\n`;
       // Get repository name (this could be expensive, but at least it's cached)
       let repoName = path.basename(repoPath);
       if (this.gitService) {
-        repoName = this.gitService.getRepoNameFromRemote(repoPath) || repoName;
+        try {
+          const remoteName = await this.gitService.getRepoNameFromRemote(
+            repoPath
+          );
+          repoName = remoteName || repoName;
+        } catch (error) {
+          // If there's an error getting the remote name, keep using the directory name
+        }
       }
 
       const status: RepositoryStatus = {
@@ -1362,9 +1373,11 @@ Repository Path: ${commit.repoPath}\n\n`;
         repo.state.indexChanges.length > 0;
 
       // Get repository name
-      let repoName;
+      let repoName: string;
       try {
-        repoName = await getRepoNameFromRemote(repoPath);
+        repoName =
+          (await this.gitService?.getRepoNameFromRemote(repoPath)) ||
+          path.basename(repoPath);
       } catch (error) {
         repoName = path.basename(repoPath);
       }
@@ -1428,7 +1441,7 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       return success(status);
     } catch (error) {
-      logError(`Error updating repository status: ${error}`);
+      this.logService?.error(`Error updating repository status: ${error}`);
       this.emit(RepositoryEvent.ERROR, error);
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
@@ -1450,18 +1463,20 @@ Repository Path: ${commit.repoPath}\n\n`;
       const activeRepos = api.repositories.filter(
         (repo: any) => repo.state.HEAD
       );
-      logInfo(`Found ${activeRepos.length} active repositories`);
+      this.logService?.info(`Found ${activeRepos.length} active repositories`);
 
       let setupCount = 0;
       let errorCount = 0;
 
       activeRepos.forEach((repo: any) => {
         const repoPath = repo.rootUri?.fsPath || "unknown";
-        logInfo(`Setting up listener for repository: ${repoPath}`);
+        this.logService?.info(
+          `Setting up listener for repository: ${repoPath}`
+        );
 
         // Add a direct check of the repository state
         if (!repo.state.onDidChange) {
-          logError(
+          this.logService?.error(
             `Repository state.onDidChange is not available for ${repoPath}`
           );
           errorCount++;
@@ -1469,10 +1484,10 @@ Repository Path: ${commit.repoPath}\n\n`;
         }
 
         const debouncedOnDidChange = debounce(async () => {
-          logInfo(`Repository change detected in ${repoPath}`);
+          this.logService?.info(`Repository change detected in ${repoPath}`);
           const result = await this.updateRepositoryStatus(repo);
           if (result.isFailure()) {
-            logError(
+            this.logService?.error(
               `Failed to update repository status: ${result.error.message}`
             );
           }
@@ -1483,10 +1498,12 @@ Repository Path: ${commit.repoPath}\n\n`;
           const disposable = { dispose: () => listener.dispose() };
           this.repoListeners.set(repoPath, disposable);
           this.disposableManager.register(disposable);
-          logInfo(`Successfully registered change listener for ${repoPath}`);
+          this.logService?.info(
+            `Successfully registered change listener for ${repoPath}`
+          );
           setupCount++;
         } catch (error) {
-          logError(
+          this.logService?.error(
             `Failed to register change listener for ${repoPath}: ${error}`
           );
           errorCount++;
@@ -1495,14 +1512,14 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       // Register for repository changes (new repositories added)
       try {
-        logInfo("Setting up listener for new repositories");
+        this.logService?.info("Setting up listener for new repositories");
         const repoChangeListener = api.onDidOpenRepository((repo: any) => {
-          logInfo(
+          this.logService?.info(
             `New repository opened: ${repo.rootUri?.fsPath || "unknown"}`
           );
           const result = this.setupRepositoryListener(repo);
           if (result.isFailure()) {
-            logError(
+            this.logService?.error(
               `Failed to setup repository listener: ${result.error.message}`
             );
           }
@@ -1511,9 +1528,13 @@ Repository Path: ${commit.repoPath}\n\n`;
         const disposable = { dispose: () => repoChangeListener.dispose() };
         this.disposableManager.register(disposable);
         this.repoListeners.set("global", disposable);
-        logInfo("Successfully registered listener for new repositories");
+        this.logService?.info(
+          "Successfully registered listener for new repositories"
+        );
       } catch (error) {
-        logError(`Failed to register listener for new repositories: ${error}`);
+        this.logService?.error(
+          `Failed to register listener for new repositories: ${error}`
+        );
         errorCount++;
       }
 
@@ -1543,7 +1564,7 @@ Repository Path: ${commit.repoPath}\n\n`;
       const debouncedOnDidChange = debounce(async () => {
         const result = await this.updateRepositoryStatus(repo);
         if (result.isFailure()) {
-          logError(
+          this.logService?.error(
             `Failed to update repository status: ${result.error.message}`
           );
         }
@@ -1554,7 +1575,7 @@ Repository Path: ${commit.repoPath}\n\n`;
         const disposable = { dispose: () => listener.dispose() };
         this.repoListeners.set(repoPath, disposable);
         this.disposableManager.register(disposable);
-        logInfo(`Added listener for repository: ${repoPath}`);
+        this.logService?.info(`Added listener for repository: ${repoPath}`);
         return success(true);
       } catch (error) {
         return failure(
@@ -1575,14 +1596,14 @@ Repository Path: ${commit.repoPath}\n\n`;
    */
   private setupDirectCommitMonitoring(api: any): Result<boolean, Error> {
     try {
-      logInfo("Setting up direct commit monitoring");
+      this.logService?.info("Setting up direct commit monitoring");
 
       // Function to process repositories periodically
       const processRepositories = () => {
         const repos = api.repositories;
         repos.forEach((repo: any) => {
           this.updateRepositoryStatus(repo).catch((error) => {
-            logError(`Error monitoring repository: ${error}`);
+            this.logService?.error(`Error monitoring repository: ${error}`);
           });
         });
       };
@@ -1595,10 +1616,12 @@ Repository Path: ${commit.repoPath}\n\n`;
         dispose: () => clearInterval(intervalId),
       });
 
-      logInfo("Direct commit monitoring set up successfully");
+      this.logService?.info("Direct commit monitoring set up successfully");
       return success(true);
     } catch (error) {
-      logError(`Failed to set up direct commit monitoring: ${error}`);
+      this.logService?.error(
+        `Failed to set up direct commit monitoring: ${error}`
+      );
       this.emit(RepositoryEvent.ERROR, error);
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
@@ -1621,7 +1644,7 @@ Repository Path: ${commit.repoPath}\n\n`;
           excludedBranches: this.excludedBranches,
         });
 
-        logInfo("Configuration updated");
+        this.logService?.info("Configuration updated");
       }
     });
 
