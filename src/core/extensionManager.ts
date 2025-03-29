@@ -57,12 +57,17 @@ export class ExtensionManager {
     this.errorHandlingService = new ErrorHandlingService(this.logService);
 
     // Initialize managers (may depend on services)
-    this.setupManager = new SetupManager(context, this.logService);
+
+    // Initialize StatusManager first
     this.statusManager = new StatusManager(
-      context,
+      this.context,
       this.gitService,
-      this.logService
+      this.logService,
+      undefined, // repositoryManager will be connected later
+      this.configurationService // pass configurationService
     );
+
+    this.setupManager = new SetupManager(context, this.logService);
     this.repositoryManager = new RepositoryManager(
       context,
       this.statusManager,
@@ -286,6 +291,74 @@ export class ExtensionManager {
 
     // Step 4: Set up event listeners
     this.registerEventListeners();
+
+    // Register for configuration changes
+    this.disposables.push(
+      this.configurationService.onDidChangeConfigurationValue<boolean>(
+        "enabled",
+        (newValue) => {
+          if (newValue) {
+            this.logService.info("Commit tracking enabled");
+            if (this.repositoryManager) {
+              this.repositoryManager.initialize();
+            }
+          } else {
+            this.logService.info("Commit tracking disabled");
+            if (this.statusManager) {
+              this.statusManager.setStoppedStatus();
+            }
+          }
+        }
+      )
+    );
+
+    this.disposables.push(
+      this.configurationService.onDidChangeConfigurationValue<number>(
+        "updateFrequencyMinutes",
+        (newValue) => {
+          this.logService.info(
+            `Update frequency changed to ${newValue} minutes`
+          );
+          if (this.statusManager) {
+            this.statusManager.startStatusUpdateInterval();
+          }
+        }
+      )
+    );
+
+    // Listen for log file path changes
+    this.disposables.push(
+      this.configurationService.onDidChangeConfigurationValue<string>(
+        "logFilePath",
+        () => this.handleLogConfigChange()
+      )
+    );
+
+    this.disposables.push(
+      this.configurationService.onDidChangeConfigurationValue<string>(
+        "logFile",
+        () => this.handleLogConfigChange()
+      )
+    );
+
+    // Handle excluded branches changes
+    this.disposables.push(
+      this.configurationService.onDidChangeConfigurationValue<string[]>(
+        "excludedBranches",
+        (newValue) => {
+          this.logService.info(
+            `Excluded branches updated: ${newValue.join(", ")}`
+          );
+          if (this.repositoryManager) {
+            this.repositoryManager.updateConfiguration(
+              this.configurationService.get("logFilePath", ""),
+              this.configurationService.get("logFile", ""),
+              newValue
+            );
+          }
+        }
+      )
+    );
   }
 
   /**
@@ -422,6 +495,16 @@ export class ExtensionManager {
     }
 
     // Additional event listeners can be added here
+  }
+
+  /**
+   * Handle changes to log file configuration
+   */
+  private handleLogConfigChange(): void {
+    this.logService.info("Log file configuration changed");
+    if (this.repositoryManager && this.configurationService.isConfigured()) {
+      this.repositoryManager.initialize();
+    }
   }
 
   /**
