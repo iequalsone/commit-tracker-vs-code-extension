@@ -102,27 +102,39 @@ export class ConfigurationService implements IConfigurationService {
 
     // Check each cached setting for changes
     this.configCache.forEach((cachedValue, key) => {
-      const fullKey = `${this.configPrefix}.${key}`;
+      // Skip if this specific key wasn't affected
+      if (!event.affectsConfiguration(`${this.configPrefix}.${key}`)) {
+        return;
+      }
 
-      if (event.affectsConfiguration(fullKey)) {
-        const newValue = config.get(key);
+      const newValue = config.get(key);
 
-        // Only emit if the value has actually changed
-        if (JSON.stringify(cachedValue) !== JSON.stringify(newValue)) {
-          // Emit change event
-          this._onDidChangeConfiguration.fire({
-            key,
+      // Only emit an event if the value actually changed
+      if (JSON.stringify(newValue) !== JSON.stringify(cachedValue)) {
+        if (this.logService) {
+          this.logService.debug(`Configuration changed: ${key}`, {
             oldValue: cachedValue,
-            newValue,
+            newValue: newValue,
           });
-
-          // Update cache
-          this.configCache.set(key, newValue);
-
-          if (this.logService) {
-            this.logService.info(`Configuration changed: ${key}`);
-          }
         }
+
+        // Determine scope of the change (best guess based on config API limitations)
+        const scope: "global" | "workspace" =
+          vscode.workspace.workspaceFolders &&
+          vscode.workspace.workspaceFolders.length > 0
+            ? "workspace"
+            : "global";
+
+        // Update the cache
+        this.configCache.set(key, newValue);
+
+        // Emit the change event
+        this._onDidChangeConfiguration.fire({
+          key,
+          oldValue: cachedValue,
+          newValue,
+          scope,
+        });
       }
     });
   }
@@ -722,5 +734,28 @@ export class ConfigurationService implements IConfigurationService {
       isValid,
       results,
     };
+  }
+
+  /**
+   * Register a listener for changes to a specific configuration key
+   * @param key The configuration key to watch
+   * @param callback Function to call when the key changes
+   * @returns Disposable that can be used to remove the listener
+   */
+  public onDidChangeConfigurationValue<T>(
+    key: string,
+    callback: (newValue: T, oldValue: T) => void
+  ): vscode.Disposable {
+    if (this.logService) {
+      this.logService.debug(
+        `Registering listener for configuration key: ${key}`
+      );
+    }
+
+    return this.onDidChangeConfiguration((event) => {
+      if (event.key === key) {
+        callback(event.newValue, event.oldValue);
+      }
+    });
   }
 }
