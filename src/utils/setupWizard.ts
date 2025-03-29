@@ -2,7 +2,6 @@ import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import { execSync } from "child_process";
 import { GitHubService, GitHubRepo } from "../services/githubService";
 import { logInfo, logError } from "./logger";
 
