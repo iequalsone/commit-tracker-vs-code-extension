@@ -17,16 +17,32 @@ export class ConfigurationService implements IConfigurationService {
     new vscode.EventEmitter<ConfigurationChangeEvent>();
 
   /**
-   * Event emitted when configuration changes
-   */
-  public readonly onDidChangeConfiguration =
-    this._onDidChangeConfiguration.event;
-
-  /**
    * Cache of configuration values
    * Used to detect changes and emit change events
    */
   private configCache: Map<string, any> = new Map();
+
+  /**
+   * Default configuration values
+   * Used for validation and resetting to defaults
+   */
+  private readonly defaultValues: Record<string, any> = {
+    enabled: false,
+    logFilePath: "",
+    logFile: "commit-tracker.log",
+    excludedBranches: [],
+    updateFrequencyMinutes: 5,
+    showNotifications: true,
+    enableDebugLogging: false,
+    enableFileLogging: false,
+    allowedAuthors: [],
+  };
+
+  /**
+   * Event emitted when configuration changes
+   */
+  public readonly onDidChangeConfiguration =
+    this._onDidChangeConfiguration.event;
 
   /**
    * Creates a new ConfigurationService
@@ -347,5 +363,90 @@ export class ConfigurationService implements IConfigurationService {
    */
   public async setExcludedBranches(branches: string[]): Promise<void> {
     await this.update("excludedBranches", branches);
+  }
+
+  /**
+   * Reset all configuration to default values
+   * @returns Promise that resolves when reset is complete
+   */
+  public async resetToDefaults(): Promise<void> {
+    if (this.logService) {
+      this.logService.info("Resetting configuration to defaults");
+    }
+
+    const config = vscode.workspace.getConfiguration(this.configPrefix);
+
+    for (const [key, value] of Object.entries(this.defaultValues)) {
+      try {
+        await config.update(key, value, vscode.ConfigurationTarget.Global);
+      } catch (error) {
+        if (this.logService) {
+          this.logService.error(
+            `Failed to reset ${key} to default value`,
+            error
+          );
+        }
+      }
+    }
+
+    // Re-initialize cache after resetting
+    this.initializeCache();
+
+    if (this.logService) {
+      this.logService.info("Configuration reset to defaults complete");
+    }
+  }
+
+  /**
+   * Get all configuration settings
+   * @returns Object containing all configuration values
+   */
+  public getAllSettings(): Record<string, any> {
+    const config = vscode.workspace.getConfiguration(this.configPrefix);
+    const result: Record<string, any> = {};
+
+    // Get all configuration keys
+    for (const key of Object.keys(this.defaultValues)) {
+      result[key] = config.get(key);
+    }
+
+    return result;
+  }
+
+  /**
+   * Validate a specific configuration setting
+   * @param key Configuration key to validate
+   * @param validator Function to validate the value
+   * @returns True if valid, false otherwise
+   */
+  public validateSetting<T>(
+    key: string,
+    validator: (value: T) => boolean
+  ): boolean {
+    const value = this.get<T>(key);
+
+    if (value === undefined) {
+      return false;
+    }
+
+    try {
+      return validator(value);
+    } catch (error) {
+      if (this.logService) {
+        this.logService.error(`Validation error for ${key}`, error);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Refresh the configuration cache
+   * Useful when configuration may have changed externally
+   */
+  public refreshCache(): void {
+    if (this.logService) {
+      this.logService.debug("Refreshing configuration cache");
+    }
+    this.initializeCache();
   }
 }
