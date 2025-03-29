@@ -269,7 +269,7 @@ export class StatusManager implements vscode.Disposable {
   /**
    * Sets up a periodic update interval for the status
    */
-  private startStatusUpdateInterval(): void {
+  public startStatusUpdateInterval(): void {
     // Clear any existing interval
     if (this.updateInterval) {
       clearInterval(this.updateInterval);
