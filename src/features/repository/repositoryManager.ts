@@ -100,6 +100,7 @@ export class RepositoryManager extends EventEmitter {
   private gitService: GitService | undefined;
   private configurationService?: IConfigurationService;
   private logService?: ILogService;
+  private _configChangeDisposable?: vscode.Disposable;
 
   private cache: {
     repositoryStatus: Map<
@@ -365,6 +366,13 @@ export class RepositoryManager extends EventEmitter {
   public async initialize(): Promise<Result<boolean, Error>> {
     try {
       this.logService?.info("Initializing repository manager");
+
+      // Load configuration - use configuration service if available
+      if (this.configurationService) {
+        this.loadConfigurationFromService();
+      } else {
+        this.loadConfiguration();
+      }
 
       // Emit event before initialization starts
       this.emit(RepositoryEvent.TRACKING_STARTED);
@@ -1711,6 +1719,44 @@ Repository Path: ${commit.repoPath}\n\n`;
     this.logFilePath = logFilePath;
     this.logFile = logFile;
     this.excludedBranches = excludedBranches;
+  }
+
+  /**
+   * Load configuration from ConfigurationService
+   */
+  private loadConfigurationFromService(): void {
+    if (!this.configurationService) {
+      return;
+    }
+
+    this.logService?.info("Loading configuration from service");
+
+    this.logFilePath = this.configurationService.get<string>("logFilePath", "");
+    this.logFile = this.configurationService.get<string>("logFile", "");
+    this.excludedBranches = this.configurationService.get<string[]>(
+      "excludedBranches",
+      []
+    );
+
+    // Register for future configuration changes
+    if (!this._configChangeDisposable) {
+      this._configChangeDisposable =
+        this.configurationService.onDidChangeConfiguration((event) => {
+          if (
+            ["logFilePath", "logFile", "excludedBranches"].includes(event.key)
+          ) {
+            this.logService?.info(`Configuration changed: ${event.key}`);
+            this.loadConfigurationFromService();
+            this.emit(RepositoryEvent.CONFIG_UPDATED, {
+              logFilePath: this.logFilePath,
+              logFile: this.logFile,
+              excludedBranches: this.excludedBranches,
+            });
+          }
+        });
+
+      this.disposableManager.register(this._configChangeDisposable);
+    }
   }
 
   /**
