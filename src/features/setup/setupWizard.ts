@@ -22,7 +22,14 @@ export class SetupWizard {
     this.context = context;
     this.logService = logService;
     this.fileSystemService = fileSystemService;
-    this.setupManager = new SetupManager(context, logService);
+    this.setupManager = new SetupManager(
+      context,
+      logService,
+      undefined,
+      undefined,
+      undefined,
+      fileSystemService
+    );
   }
 
   /**
@@ -148,7 +155,27 @@ export class SetupWizard {
       terminal.sendText("git init");
       terminal.sendText('git config user.name "Commit Tracker"');
       terminal.sendText('git config user.email "commit.tracker@example.com"');
-      terminal.sendText("touch commit-tracker.log");
+
+      // Create initial file using FileSystemService if available
+      if (this.fileSystemService) {
+        const filePath = path.join(folderPath, "commit-tracker.log");
+        const writeResult = await this.fileSystemService.writeFile(
+          filePath,
+          "# Commit Tracker Log File\nInitialized on " +
+            new Date().toISOString() +
+            "\n"
+        );
+
+        if (writeResult.isFailure()) {
+          this.logService.error(
+            `Failed to create initial log file: ${writeResult.error}`
+          );
+        }
+      } else {
+        // Fallback to terminal command
+        terminal.sendText("touch commit-tracker.log");
+      }
+
       terminal.sendText("git add commit-tracker.log");
       terminal.sendText('git commit -m "Initial commit for Commit Tracker"');
       terminal.sendText("exit");
@@ -189,11 +216,6 @@ export class SetupWizard {
    * Create a new folder for commit logs
    */
   private async createNewFolder(): Promise<string | undefined> {
-    if (!this.fileSystemService) {
-      this.logService.error("FileSystemService is not initialized");
-      return;
-    }
-
     // First select a parent directory
     const parentOptions: vscode.OpenDialogOptions = {
       canSelectFiles: false,
@@ -219,7 +241,8 @@ export class SetupWizard {
 
     // Create the folder
     const fullPath = path.join(parentUri[0].fsPath, folderName);
-    try {
+
+    if (this.fileSystemService) {
       const createDirResult = await this.fileSystemService.ensureDirectory(
         fullPath
       );
@@ -233,13 +256,21 @@ export class SetupWizard {
         );
         return undefined;
       }
-
-      return fullPath;
-    } catch (error) {
-      this.logService.error(`Error creating folder: ${error}`);
-      vscode.window.showErrorMessage(`Failed to create folder: ${error}`);
-      return undefined;
+    } else {
+      // Fallback to direct fs operations
+      try {
+        const fs = require("fs");
+        if (!fs.existsSync(fullPath)) {
+          fs.mkdirSync(fullPath, { recursive: true });
+        }
+      } catch (error) {
+        this.logService.error(`Error creating folder: ${error}`);
+        vscode.window.showErrorMessage(`Failed to create folder: ${error}`);
+        return undefined;
+      }
     }
+
+    return fullPath;
   }
 
   /**
