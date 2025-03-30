@@ -1,10 +1,11 @@
 import { Result } from "../../utils/results";
+import * as vscode from "vscode";
 
 /**
  * Interface defining file system operations for the extension
  * Provides an abstraction over Node.js fs operations with added security, error handling, and caching
  */
-export interface IFileSystemService {
+export interface IFileSystemService extends vscode.Disposable {
   /**
    * Read a file as text
    * @param path Path to the file
