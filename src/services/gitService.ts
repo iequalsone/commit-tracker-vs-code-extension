@@ -111,38 +111,36 @@ export class GitService {
    */
   public async getCurrentBranch(
     workspaceRoot?: string
-  ): Promise<string | null> {
+  ): Promise<Result<string, Error>> {
     try {
       const root = workspaceRoot || this.getWorkspaceRoot();
+
       if (!root) {
-        if (this.logService) {
-          this.logService.warn(
-            "No workspace root available for git operations"
-          );
-        }
-        return null;
+        return failure(new Error("No workspace root available"));
       }
 
-      // Use cache if available
+      this.logService?.debug(`Getting current branch for: ${root}`);
+
+      // Try to get from cache first
       const cacheKey = `branch:${root}`;
-      const cachedBranch = this.getFromCache(cacheKey, 5000); // Short TTL for branch
+      const cachedBranch = this.getFromCache(cacheKey);
+
       if (cachedBranch) {
-        return cachedBranch;
+        return success(cachedBranch);
       }
 
-      const branch = await this.executeGitCommand(
+      const result = await this.executeGitCommand(
         root,
         "rev-parse --abbrev-ref HEAD"
       );
 
       // Cache the result
-      this.setInCache(cacheKey, branch, 5000);
-      return branch;
+      this.setInCache(cacheKey, result);
+
+      return success(result);
     } catch (error) {
-      if (this.logService) {
-        this.logService.error("Failed to get current branch", error);
-      }
-      return null;
+      this.logService?.error(`Error getting current branch: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -151,43 +149,62 @@ export class GitService {
    * @param workspaceRoot Optional workspace root path
    * @returns True if there are unpushed commits
    */
-  public async hasUnpushedCommits(workspaceRoot?: string): Promise<boolean> {
+  public async hasUnpushedCommits(
+    workspaceRoot?: string
+  ): Promise<Result<boolean, Error>> {
     try {
-      const path = workspaceRoot || this.getWorkspaceRoot();
-      if (!path) {
-        return false;
+      const root = workspaceRoot || this.getWorkspaceRoot();
+
+      if (!root) {
+        return failure(new Error("No workspace root available"));
       }
 
-      // Get current branch
-      const branch = await this.getCurrentBranch(path);
-      if (!branch) {
-        return false;
-      }
+      this.logService?.debug(`Checking for unpushed commits in: ${root}`);
 
-      // Generate cache key - shorter TTL for unpushed commits
-      const cacheKey = `unpushed:${path}:${branch}`;
+      // Try to get from cache first
+      const cacheKey = `unpushed:${root}`;
+      const cached = this.getFromCache(cacheKey);
 
-      // Try to get from cache with shorter TTL
-      const cachedValue = this.getFromCache(cacheKey, 30 * 1000); // 30 seconds TTL
-      if (cachedValue !== null) {
-        return cachedValue;
+      if (cached !== null) {
+        return success(cached);
       }
 
       // Check for unpushed commits
-      const result = execSync(`git cherry -v origin/${branch}`, {
-        cwd: path,
-      }).toString();
+      try {
+        const output = await this.executeGitCommand(
+          root,
+          "log @{u}..HEAD --oneline"
+        );
 
-      const hasUnpushed = result.trim().length > 0;
+        const hasUnpushed = output.trim().length > 0;
 
-      // Store in cache
-      this.setInCache(cacheKey, hasUnpushed);
+        // Cache the result
+        this.setInCache(cacheKey, hasUnpushed);
 
-      return hasUnpushed;
+        return success(hasUnpushed);
+      } catch (error) {
+        // If this fails, it might be because there's no upstream branch
+        // In that case, try another method
+        try {
+          const statusOutput = await this.executeGitCommand(root, "status -sb");
+
+          const hasUnpushed = statusOutput.includes("ahead");
+
+          // Cache the result
+          this.setInCache(cacheKey, hasUnpushed);
+
+          return success(hasUnpushed);
+        } catch (innerError) {
+          return failure(
+            innerError instanceof Error
+              ? innerError
+              : new Error(String(innerError))
+          );
+        }
+      }
     } catch (error) {
-      // This can fail if the branch doesn't exist on remote or other git issues
-      // In case of an error, we assume there are unpushed commits
-      return true;
+      this.logService?.error(`Error checking for unpushed commits: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -331,61 +348,41 @@ export class GitService {
    * @param repoPath Path to the log file directory
    * @returns A promise that resolves when the pull is complete
    */
-  public async pullChanges(repoPath: string): Promise<void> {
+  public async pullChanges(repoPath: string): Promise<Result<void, Error>> {
     try {
+      this.logService?.info(
+        `Pulling changes from tracking repository at: ${repoPath}`
+      );
+
       // Check if this is a git repository
-      if (!fs.existsSync(path.join(repoPath, ".git"))) {
-        return;
+      const isRepoResult = await this.isGitRepository(repoPath);
+
+      if (!isRepoResult) {
+        return failure(new Error(`${repoPath} is not a valid Git repository`));
       }
 
       // First, check if there's actually an origin remote
       try {
-        const remotes = execSync("git remote", {
-          cwd: repoPath,
-        })
-          .toString()
-          .trim();
-
-        if (!remotes.includes("origin")) {
-          return;
-        }
+        await this.executeGitCommand(repoPath, "remote get-url origin");
       } catch (error) {
-        return;
+        this.logService?.warn("No remote origin found, skipping pull");
+        return success(undefined);
       }
 
       // Check for tracking branch without failing if there isn't one
       try {
-        const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", {
-          cwd: repoPath,
-        })
-          .toString()
-          .trim();
-
-        const trackingBranch = execSync(
-          `git for-each-ref --format='%(upstream:short)' $(git symbolic-ref -q HEAD)`,
-          { cwd: repoPath }
-        )
-          .toString()
-          .trim();
-
-        if (!trackingBranch) {
-          return;
-        }
-
-        // Do the pull
-        execSync("git pull --rebase", {
-          cwd: repoPath,
-          timeout: 30000, // 30 seconds timeout
-        });
-
-        // Invalidate cache for this repo
-        this.invalidateCache(repoPath);
+        await this.executeGitCommand(repoPath, "pull");
+        this.logService?.info(
+          "Successfully pulled changes from tracking repository"
+        );
       } catch (error) {
-        // This could happen if there's no upstream branch set
+        this.logService?.warn(`Pull failed but continuing: ${error}`);
       }
+
+      return success(undefined);
     } catch (error) {
-      // Log error but don't throw - allow the extension to continue
-      throw error;
+      this.logService?.error(`Failed to pull changes: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -398,83 +395,22 @@ export class GitService {
   public async createPushScript(
     repoPath: string,
     filePath: string
-  ): Promise<string> {
+  ): Promise<Result<string, Error>> {
     try {
-      // Create a temporary shell script with detailed logging
-      const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+      this.logService?.info(
+        `Creating push script for: ${filePath} in ${repoPath}`
+      );
 
-      // Write a more streamlined script for terminal use that will self-close
-      const scriptContent = `#!/bin/bash
-# Commit-tracker push script
-echo "=== Commit Tracker Automatic Push ==="
-echo "Repository: ${repoPath}"
-
-# Change to the repository directory
-cd "${repoPath}"
-
-# Stage the file
-echo "Adding file: ${filePath}"
-git add "${filePath}"
-
-# Commit changes if needed
-if git status --porcelain | grep -q .; then
-  echo "Changes detected, committing..."
-  git commit -m "Update commit log - $(date -Iseconds)"
-  echo "Commit successful"
-else
-  echo "No changes to commit"
-  sleep 2 # Give user time to see the message
-  exit 0
-fi
-
-# Check if remote exists
-if git remote | grep -q origin; then
-  echo "Remote 'origin' exists"
-  
-  # Get current branch
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  echo "Current branch: $CURRENT_BRANCH"
-  
-  # Push changes
-  echo "Pushing changes to origin/$CURRENT_BRANCH..."
-  git push
-  
-  # Check if push succeeded
-  if [ $? -eq 0 ]; then
-    echo "Push successful!"
-  else
-    echo "Push failed, trying with upstream tracking..."
-    git push -u origin $CURRENT_BRANCH
-    
-    if [ $? -eq 0 ]; then
-      echo "Push with upstream tracking successful!"
-    else
-      exit 1
-    fi
-  fi
-else
-  echo "No remote 'origin' configured, skipping push"
-fi
-
-echo "=== Commit Tracker Push Complete ==="
-echo "Terminal will close in 3 seconds..."
-sleep 3
-`;
-
-      // Use fileSystemService to write the script
-      this.fileSystemService.writeFile(scriptPath, scriptContent, {
-        mode: 0o755,
+      // Create push script with default options
+      return this.createAdvancedPushScript(repoPath, filePath, {
+        commitMessage: `Update commit log - ${new Date().toISOString()}`,
+        showOutput: true,
+        autoClose: true,
+        timeout: 3,
       });
-
-      return scriptPath;
     } catch (error) {
-      // Log the error if logger is available
-      if (this.logService) {
-        this.logService.error("Failed to create push script", error);
-      }
-
-      // Throw the error instead of returning a Result object
-      throw error instanceof Error ? error : new Error(String(error));
+      this.logService?.error(`Error creating push script: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -553,8 +489,6 @@ sleep 3
       this.cache = {};
     }
   }
-
-  // Add after the existing methods in GitService class
 
   /**
    * Executes a git command in the specified repository path
@@ -866,6 +800,9 @@ sleep 3
     );
 
     if (writeResult.isFailure()) {
+      this.logService?.error(
+        `Failed to create Git script: ${writeResult.error}`
+      );
       return failure(writeResult.error);
     }
 
@@ -879,19 +816,21 @@ sleep 3
    */
   public async isGitRepository(repoPath: string): Promise<boolean> {
     try {
-      // Use fileSystemService to check if .git directory exists
-      const gitDirResult = await this.fileSystemService.exists(
-        path.join(repoPath, ".git")
-      );
+      this.logService?.debug(`Checking if ${repoPath} is a Git repository`);
 
-      if (gitDirResult.isFailure()) {
+      const gitDirPath = path.join(repoPath, ".git");
+
+      // Use fileSystemService to check if .git directory exists
+      const existsResult = await this.fileSystemService.exists(gitDirPath);
+
+      if (existsResult.isFailure()) {
         this.logService?.error(
-          `Error checking Git repository: ${gitDirResult.error}`
+          `Error checking if Git repository exists: ${existsResult.error}`
         );
         return false;
       }
 
-      return gitDirResult.value;
+      return existsResult.value;
     } catch (error) {
       this.logService?.error(
         `Error checking if path is a Git repository: ${error}`
@@ -905,29 +844,31 @@ sleep 3
    * @param repoPath Path to the repository
    * @returns The remote URL or null if not found
    */
-  public getRemoteUrl(repoPath: string): string | null {
+  public async getRemoteUrl(repoPath: string): Promise<Result<string, Error>> {
     try {
-      // Generate cache key
-      const cacheKey = `remote:url:${repoPath}`;
+      this.logService?.debug(`Getting remote URL for repository: ${repoPath}`);
 
-      // Try to get from cache with longer TTL
-      const cachedValue = this.getFromCache(cacheKey, 30 * 60 * 1000); // 30 minutes TTL
-      if (cachedValue !== null) {
-        return cachedValue;
+      // Check if it's a git repository first
+      if (!(await this.isGitRepository(repoPath))) {
+        return failure(new Error(`${repoPath} is not a Git repository`));
       }
 
-      const remoteUrl = execSync("git remote get-url origin", {
-        cwd: repoPath,
-      })
-        .toString()
-        .trim();
+      // Get the remote URL using git command
+      const remoteOutput = await this.executeGitCommand(
+        repoPath,
+        "remote get-url origin"
+      ).catch(() => "");
 
-      // Store in cache
-      this.setInCache(cacheKey, remoteUrl);
+      // If we couldn't get the remote, return null
+      if (!remoteOutput) {
+        this.logService?.info(`No remote URL found for ${repoPath}`);
+        return success("");
+      }
 
-      return remoteUrl;
+      return success(remoteOutput.trim());
     } catch (error) {
-      return null;
+      this.logService?.error(`Failed to get remote URL: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -936,32 +877,24 @@ sleep 3
    * @param repoPath Path to the repository
    * @returns Short status string
    */
-  public getShortStatus(repoPath: string): string {
+  public async getShortStatus(
+    repoPath: string
+  ): Promise<Result<string, Error>> {
     try {
-      // Generate cache key
-      const cacheKey = `status:short:${repoPath}`;
+      this.logService?.debug(
+        `Getting short status for repository: ${repoPath}`
+      );
 
-      // Try to get from cache with very short TTL (status changes frequently)
-      const cachedValue = this.getFromCache(cacheKey, 5 * 1000); // 5 seconds TTL
-      if (cachedValue !== null) {
-        return cachedValue;
-      }
+      // Use executeGitCommand for consistency
+      const statusOutput = await this.executeGitCommand(
+        repoPath,
+        "status --short"
+      );
 
-      const status = execSync("git status --porcelain", {
-        cwd: repoPath,
-      })
-        .toString()
-        .trim();
-
-      // Store in cache
-      this.setInCache(cacheKey, status);
-
-      return status;
+      return success(statusOutput.trim());
     } catch (error) {
-      if (this.logService) {
-        this.logService.error(`Error getting short status: ${error}`);
-      }
-      return "";
+      this.logService?.error(`Failed to get repository short status: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -970,17 +903,28 @@ sleep 3
    * @param repoPath Path to the repository
    * @returns True if the repository has uncommitted changes
    */
-  public hasUncommittedChanges(repoPath: string): boolean {
+  public async hasUncommittedChanges(
+    repoPath: string
+  ): Promise<Result<boolean, Error>> {
     try {
-      const status = this.getShortStatus(repoPath);
-      return status.length > 0;
-    } catch (error) {
-      if (this.logService) {
-        this.logService.error(
-          `Error checking for uncommitted changes: ${error}`
-        );
+      this.logService?.debug(
+        `Checking for uncommitted changes in: ${repoPath}`
+      );
+
+      // Get status and check if there's any output
+      const statusResult = await this.getShortStatus(repoPath);
+
+      if (statusResult.isFailure()) {
+        return failure(statusResult.error);
       }
-      return false;
+
+      // If there's any output, there are changes
+      return success(statusResult.value.length > 0);
+    } catch (error) {
+      this.logService?.error(
+        `Error checking for uncommitted changes: ${error}`
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -1011,13 +955,10 @@ sleep 3
 
     const settings = { ...defaults, ...options };
 
-    // Create a temporary shell script
-    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
-
     // Build a more customizable script
     const scriptContent = `#!/bin/bash
-# Commit Tracker push operation script
-echo "=== Commit Tracker Push Operation ==="
+# Commit Tracker Push Script
+echo "=== Commit Tracker Automatic Push ==="
 echo "Repository: ${repoPath}"
 echo "File: ${filePath}"
 
@@ -1027,67 +968,69 @@ cd "${repoPath}" || { echo "Failed to change to repository directory"; exit 1; }
 # Stage the file
 echo "Adding file: ${filePath}"
 git add "${filePath}"
-ADD_RESULT=$?
 
-if [ $ADD_RESULT -ne 0 ]; then
-  echo "Failed to add file with status $ADD_RESULT"
-  exit 1
-fi
-
-# Check if there are changes to commit
-if ! git status --porcelain | grep -q .; then
-  echo "No changes to commit"
-  exit 0
-fi
-
-# Commit changes
-echo "Committing changes..."
-git commit -m "${settings.commitMessage}"
-COMMIT_RESULT=$?
-
-if [ $COMMIT_RESULT -ne 0 ]; then
-  echo "Failed to commit changes with status $COMMIT_RESULT"
-  exit 1
-fi
-
-# Push changes if remote exists
-if git remote | grep -q origin; then
-  echo "Pushing changes to remote origin..."
-  git push
-  PUSH_RESULT=$?
-  
-  if [ $PUSH_RESULT -ne 0 ]; then
-    echo "Push failed with status $PUSH_RESULT"
+# Commit changes if needed
+if git status --porcelain | grep -q .; then
+  echo "Changes detected, committing..."
+  git commit -m "${settings.commitMessage}"
+  if [ $? -eq 0 ]; then
+    echo "Commit successful"
+  else
+    echo "Commit failed"
     exit 1
   fi
+else
+  echo "No changes to commit"
+  sleep 2
+  ${settings.autoClose ? "exit 0" : ""}
+fi
+
+# Check if remote exists
+if git remote | grep -q origin; then
+  echo "Remote 'origin' exists"
   
-  echo "Push successful!"
+  # Get current branch
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  echo "Current branch: $CURRENT_BRANCH"
+  
+  # Push changes
+  echo "Pushing changes to origin/$CURRENT_BRANCH..."
+  git push
+  
+  if [ $? -eq 0 ]; then
+    echo "Push successful!"
+  else
+    echo "Push failed. You may need to push manually."
+  fi
 else
   echo "No remote 'origin' configured, skipping push"
 fi
 
-echo "=== Operation complete ==="
+echo "=== Commit Tracker Push Complete ==="
 ${
   settings.autoClose
-    ? `echo "Terminal will close in ${settings.timeout} seconds..."
-sleep ${settings.timeout}`
+    ? 'echo "Terminal will close in ${settings.timeout} seconds..."; sleep ${settings.timeout}'
     : 'echo "Terminal will remain open"'
 }
 `;
 
-    // Use fileSystemService instead of fs directly
+    // Use FileSystemService to create the script file
+    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+
     const writeResult = await this.fileSystemService.writeFile(
       scriptPath,
       scriptContent,
-      {
-        mode: 0o755,
-      }
+      { mode: 0o755 } // Make script executable
     );
 
     if (writeResult.isFailure()) {
+      this.logService?.error(
+        `Failed to create push script: ${writeResult.error}`
+      );
       return failure(writeResult.error);
     }
 
+    this.logService?.info(`Created push script at: ${scriptPath}`);
     return success(scriptPath);
   }
 }

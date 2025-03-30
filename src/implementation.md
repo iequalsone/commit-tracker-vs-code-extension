@@ -134,7 +134,7 @@ Step 5: Setup Dependency Injection
 [x] Configure default implementation for backward compatibility
 
 Step 6: Refactor Components
-[] Update GitService to use IFileSystemService
+[x] Update GitService to use IFileSystemService
 [] Refactor RepositoryManager to use the service
 [] Migrate SetupManager and SetupWizard usage
 [] Update any CommandManager file operations
