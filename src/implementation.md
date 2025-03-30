@@ -135,8 +135,8 @@ Step 5: Setup Dependency Injection
 
 Step 6: Refactor Components
 [x] Update GitService to use IFileSystemService
-[] Refactor RepositoryManager to use the service
-[] Migrate SetupManager and SetupWizard usage
+[x] Refactor RepositoryManager to use the service
+[x] Migrate SetupManager and SetupWizard usage
 [] Update any CommandManager file operations
 
 Step 7: Add Enhanced Functionality
