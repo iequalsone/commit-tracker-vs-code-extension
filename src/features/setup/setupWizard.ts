@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { LogService } from "../../services/logService";
 import { SetupManager } from "./setupManager";
+import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
 
 /**
  * Provides a guided setup process for the Commit Tracker extension
@@ -10,11 +11,17 @@ import { SetupManager } from "./setupManager";
 export class SetupWizard {
   private readonly context: vscode.ExtensionContext;
   private readonly logService: LogService;
+  private fileSystemService?: IFileSystemService;
   private setupManager: SetupManager;
 
-  constructor(context: vscode.ExtensionContext, logService: LogService) {
+  constructor(
+    context: vscode.ExtensionContext,
+    logService: LogService,
+    fileSystemService?: IFileSystemService
+  ) {
     this.context = context;
     this.logService = logService;
+    this.fileSystemService = fileSystemService;
     this.setupManager = new SetupManager(context, logService);
   }
 
@@ -182,6 +189,11 @@ export class SetupWizard {
    * Create a new folder for commit logs
    */
   private async createNewFolder(): Promise<string | undefined> {
+    if (!this.fileSystemService) {
+      this.logService.error("FileSystemService is not initialized");
+      return;
+    }
+
     // First select a parent directory
     const parentOptions: vscode.OpenDialogOptions = {
       canSelectFiles: false,
@@ -208,7 +220,20 @@ export class SetupWizard {
     // Create the folder
     const fullPath = path.join(parentUri[0].fsPath, folderName);
     try {
-      fs.mkdirSync(fullPath, { recursive: true });
+      const createDirResult = await this.fileSystemService.ensureDirectory(
+        fullPath
+      );
+
+      if (createDirResult.isFailure()) {
+        this.logService.error(
+          `Error creating folder: ${createDirResult.error}`
+        );
+        vscode.window.showErrorMessage(
+          `Failed to create folder: ${createDirResult.error}`
+        );
+        return undefined;
+      }
+
       return fullPath;
     } catch (error) {
       this.logService.error(`Error creating folder: ${error}`);
