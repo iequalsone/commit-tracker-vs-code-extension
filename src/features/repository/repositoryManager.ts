@@ -2,11 +2,6 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 import { GitService } from "../../services/gitService";
-import {
-  ensureDirectoryExists,
-  appendToFile,
-  validatePath,
-} from "../../services/fileService";
 import { debounce } from "../../utils/debounce";
 import { DisposableManager } from "../../utils/DisposableManager";
 import { Result, success, failure } from "../../utils/results";
@@ -334,7 +329,9 @@ export class RepositoryManager extends EventEmitter {
    * Set up event listeners to update status via StatusManager
    */
   private setupStatusManagerEvents(): void {
-    if (!this.statusManager) return;
+    if (!this.statusManager) {
+      return;
+    }
 
     // Listen for repository events
     this.on(RepositoryEvent.COMMIT_DETECTED, (repo, commitHash) => {
@@ -371,38 +368,70 @@ export class RepositoryManager extends EventEmitter {
     try {
       this.logService?.info("Initializing repository manager");
 
-      // Load configuration - use configuration service if available
-      if (this.configurationService) {
-        this.loadConfigurationFromService();
-      } else {
-        this.loadConfiguration();
+      // Load configuration (should be done already but double-check)
+      this.loadConfiguration();
+
+      if (!this.fileSystemService) {
+        return failure(new Error("File system service not initialized"));
       }
 
-      // Emit event before initialization starts
-      this.emit(RepositoryEvent.TRACKING_STARTED);
+      // Validate tracking repository exists
+      const dirExistsResult = await this.fileSystemService.exists(
+        this.logFilePath
+      );
+      if (dirExistsResult.isFailure()) {
+        return failure(dirExistsResult.error);
+      }
 
-      try {
-        await this.gitService?.pullChanges(this.logFilePath);
-        this.logService?.info(
-          "Successfully pulled latest changes from tracking repository"
+      if (!dirExistsResult.value) {
+        this.logService?.error(
+          `Tracking directory does not exist: ${this.logFilePath}`
         );
-      } catch (err) {
-        this.handleError(
-          err,
-          "pulling changes from tracking repository",
-          ErrorType.GIT_OPERATION,
-          false
+        this.requestSetup();
+        return failure(
+          new Error(`Tracking directory does not exist: ${this.logFilePath}`)
         );
       }
 
+      // Ensure log file directory exists
+      const ensureDirResult = await this.fileSystemService.ensureDirectory(
+        path.dirname(path.join(this.logFilePath, this.logFile))
+      );
+      if (ensureDirResult.isFailure()) {
+        return failure(ensureDirResult.error);
+      }
+
+      // Pull changes if gitService is available
+      if (this.gitService) {
+        try {
+          const pullResult = await this.gitService.pullChanges(
+            this.logFilePath
+          );
+          if (pullResult.isFailure()) {
+            this.logService?.warn(
+              `Failed to pull changes from tracking repository: ${pullResult.error.message}`
+            );
+          } else {
+            this.logService?.info(
+              "Successfully pulled latest changes from tracking repository"
+            );
+          }
+        } catch (err) {
+          this.logService?.warn(
+            `Failed to pull changes from tracking repository: ${err}`
+          );
+        }
+      }
+
+      // Find git extension
       const gitExtension =
         vscode.extensions.getExtension("vscode.git")?.exports;
       if (!gitExtension) {
-        const error = new Error("Git extension is not available");
+        const error = new Error("Git extension not found");
         this.handleError(
           error,
-          "initializing repository monitoring",
-          ErrorType.CONFIGURATION,
+          "initialize",
+          ErrorType.EXTENSION_NOT_FOUND,
           true
         );
         return failure(error);
@@ -410,59 +439,65 @@ export class RepositoryManager extends EventEmitter {
 
       const api = gitExtension.getAPI(1);
       if (!api) {
-        return failure(new Error("Failed to get Git API"));
+        const error = new Error("Git API could not be initialized");
+        this.handleError(
+          error,
+          "initialize",
+          ErrorType.API_INITIALIZATION_FAILED,
+          true
+        );
+        return failure(error);
       }
 
       this.logService?.info(
         "Git API available, setting up repository listeners"
       );
 
-      // Set up monitoring methods
-      const listenersResult = this.setupRepositoryListeners(api);
-      if (listenersResult.isFailure()) {
-        return failure(listenersResult.error);
+      // Set up monitoring
+      const repoListenersResult = this.setupRepositoryListeners(api);
+      if (repoListenersResult.isFailure()) {
+        return failure(repoListenersResult.error);
       }
 
-      const monitoringResult = this.setupDirectCommitMonitoring(api);
-      if (monitoringResult.isFailure()) {
-        return failure(monitoringResult.error);
+      const directMonitoringResult = this.setupDirectCommitMonitoring(api);
+      if (directMonitoringResult.isFailure()) {
+        return failure(directMonitoringResult.error);
       }
 
-      // Process current commits immediately
+      // Process current repos immediately
       this.logService?.info("Processing current repository states");
       try {
         const repos = api.repositories;
         for (const repo of repos) {
-          if (repo.state.HEAD?.commit) {
-            const result = await this.updateRepositoryStatus(repo);
-            if (result.isFailure()) {
-              this.logService?.error(
-                `Error updating repository status: ${result.error.message}`
-              );
-            }
-          }
+          await this.updateRepositoryStatus(repo);
         }
+
+        this.emit(RepositoryEvent.REPOSITORY_INITIALIZED, repos.length);
       } catch (error) {
         this.logService?.error(
           `Error processing current repositories: ${error}`
         );
       }
 
-      // Emit event after successful initialization
-      this.emit(RepositoryEvent.TRACKING_STARTED, api.repositories.length);
-
-      // Emit an event that the repository has been initialized
-      this.emit(RepositoryEvent.REPOSITORY_INITIALIZED, true);
+      // Check for unpushed commits
+      await this.checkUnpushedCommits();
 
       return success(true);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logService?.error(
+        `Failed to initialize repository manager: ${errorMsg}`,
+        error
+      );
       this.handleError(
         error,
-        "initializing repository manager",
-        ErrorType.UNKNOWN,
+        "initialize",
+        ErrorType.INITIALIZATION_FAILED,
         true
       );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      return failure(
+        new Error(`Failed to initialize repository manager: ${errorMsg}`)
+      );
     }
   }
 
@@ -477,9 +512,6 @@ export class RepositoryManager extends EventEmitter {
 
   /**
    * Process a specific commit from a repository
-   * @param repo The repository containing the commit
-   * @param commitHash The commit hash to process
-   * @returns Result indicating success or failure
    */
   public async processCommit(
     repo: any,
@@ -514,10 +546,16 @@ export class RepositoryManager extends EventEmitter {
 
       // Check if it's in the log file
       try {
+        if (!this.fileSystemService) {
+          return failure(new Error("FileSystemService is not initialized"));
+        }
+
         const logPath = path.join(this.logFilePath, this.logFile);
-        if (fs.existsSync(logPath)) {
-          const logContent = fs.readFileSync(logPath, "utf8");
-          if (logContent.includes(commitHash)) {
+        const existsResult = await this.fileSystemService.exists(logPath);
+
+        if (existsResult.isSuccess() && existsResult.value) {
+          const readResult = await this.fileSystemService.readFile(logPath);
+          if (readResult.isSuccess() && readResult.value.includes(commitHash)) {
             return failure(
               new Error(`Commit already in log file: ${commitHash}`)
             );
@@ -528,31 +566,49 @@ export class RepositoryManager extends EventEmitter {
       }
 
       // Get commit details
-      const message =
-        (await this.gitService?.getCommitMessage(repoPath, commitHash)) ||
-        "No commit message";
-      const author =
-        (await this.gitService?.getCommitAuthorDetails(repoPath, commitHash)) ||
-        "Unknown author";
-      const date = new Date().toISOString();
+      let message = "No commit message";
+      let author = "Unknown author";
+      const commitDate = new Date().toISOString();
 
-      repoName =
-        (await this.gitService?.getRepoNameFromRemote(repoPath)) ??
-        path.basename(repoPath);
+      if (this.gitService) {
+        const messageResult = await this.gitService.getCommitMessage(
+          repoPath,
+          commitHash
+        );
+        if (messageResult.isSuccess()) {
+          message = messageResult.value;
+        }
 
-      const commit: Commit = {
-        hash: commitHash,
-        message,
-        author,
-        date,
-        branch,
-        repoName,
-        repoPath,
-      };
+        const authorResult = await this.gitService.getCommitAuthorDetails(
+          repoPath,
+          commitHash
+        );
+        if (authorResult.isSuccess()) {
+          author = authorResult.value;
+        }
+
+        const repoNameResult = await this.gitService.getRepoNameFromRemote(
+          repoPath
+        );
+        if (repoNameResult.isSuccess()) {
+          repoName = repoNameResult.value;
+        }
+      }
 
       // Update last processed commit
       this.lastProcessedCommit = commitHash;
       await this.context.globalState.update("lastProcessedCommit", commitHash);
+
+      // Create the commit object
+      const commit: Commit = {
+        hash: commitHash,
+        message,
+        author,
+        date: commitDate,
+        branch,
+        repoName,
+        repoPath,
+      };
 
       // Create log message
       const logMessage = `Commit: ${commit.hash}
@@ -566,12 +622,33 @@ Repository Path: ${commit.repoPath}\n\n`;
       // Write to log file
       const trackingFilePath = path.join(this.logFilePath, this.logFile);
 
-      if (!validatePath(trackingFilePath)) {
+      // Use FileSystemService for file operations
+      if (!this.fileSystemService?.validatePath(trackingFilePath)) {
         return failure(new Error("Invalid tracking file path"));
       }
 
-      ensureDirectoryExists(path.dirname(trackingFilePath));
-      await appendToFile(trackingFilePath, logMessage);
+      const dirResult = await this.fileSystemService.ensureDirectory(
+        path.dirname(trackingFilePath)
+      );
+      if (dirResult.isFailure()) {
+        return failure(
+          new Error(
+            `Failed to ensure directory exists: ${dirResult.error.message}`
+          )
+        );
+      }
+
+      const appendResult = await this.fileSystemService.appendToFile(
+        trackingFilePath,
+        logMessage
+      );
+      if (appendResult.isFailure()) {
+        return failure(
+          new Error(
+            `Failed to write to log file: ${appendResult.error.message}`
+          )
+        );
+      }
 
       // Emit event that commit was processed
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commit, trackingFilePath);
@@ -609,30 +686,47 @@ Repository Path: ${commit.repoPath}\n\n`;
         `Logging commit details - Repo: ${repoPath}, Commit: ${headCommit}, Branch: ${branch}`
       );
 
+      if (!this.gitService) {
+        return failure(new Error("Git service not initialized"));
+      }
+
       if (!this.fileSystemService) {
-        return failure(new Error("FileSystemService is not available"));
+        return failure(new Error("File system service not initialized"));
       }
 
       // Get commit details
-      const message =
-        (await this.gitService?.getCommitMessage(repoPath, headCommit)) ||
-        "Unknown commit message";
+      const messageResult = await this.gitService.getCommitMessage(
+        repoPath,
+        headCommit
+      );
+      if (messageResult.isFailure()) {
+        return failure(messageResult.error);
+      }
+      const message = messageResult.value;
+
       const commitDate = new Date().toISOString();
-      const author =
-        (await this.gitService?.getCommitAuthorDetails(repoPath, headCommit)) ||
-        "Unknown author";
+
+      const authorResult = await this.gitService.getCommitAuthorDetails(
+        repoPath,
+        headCommit
+      );
+      if (authorResult.isFailure()) {
+        return failure(authorResult.error);
+      }
+      const author = authorResult.value;
 
       // Get repository name
       let repoName;
-      try {
-        repoName =
-          (await this.gitService?.getRepoNameFromRemote(repoPath)) ||
-          path.basename(repoPath);
-      } catch (error) {
+      const repoNameResult = await this.gitService.getRepoNameFromRemote(
+        repoPath
+      );
+      if (repoNameResult.isFailure()) {
         repoName = path.basename(repoPath);
         this.logService?.warn(
-          `Failed to get repository name, using directory name: ${repoName}`
+          `Couldn't get repo name from remote, using directory name: ${repoName}`
         );
+      } else {
+        repoName = repoNameResult.value;
       }
 
       // Create log message
@@ -648,30 +742,33 @@ Repository Path: ${repoPath}\n\n`;
       const trackingFilePath = path.join(this.logFilePath, this.logFile);
       this.logService?.info(`Writing log to: ${trackingFilePath}`);
 
-      // Validate the path
+      // Validate path
       if (!this.fileSystemService.validatePath(trackingFilePath)) {
         return failure(new Error("Invalid tracking file path"));
       }
 
-      // Ensure directory exists
+      // Ensure the directory exists
       const dirResult = await this.fileSystemService.ensureDirectory(
         path.dirname(trackingFilePath)
       );
-
       if (dirResult.isFailure()) {
         return failure(
-          new Error(`Failed to ensure directory exists: ${dirResult.error}`)
+          new Error(
+            `Failed to ensure directory exists: ${dirResult.error.message}`
+          )
         );
       }
 
-      // Append to log file
-      const writeResult = await this.fileSystemService.appendToFile(
+      // Append to the file
+      const appendResult = await this.fileSystemService.appendToFile(
         trackingFilePath,
         logMessage
       );
-      if (writeResult.isFailure()) {
+      if (appendResult.isFailure()) {
         return failure(
-          new Error(`Failed to write to log file: ${writeResult.error}`)
+          new Error(
+            `Failed to write to log file: ${appendResult.error.message}`
+          )
         );
       }
 
@@ -679,19 +776,41 @@ Repository Path: ${repoPath}\n\n`;
         `Successfully logged commit details to ${this.logFile}`
       );
 
-      // Request push operation (handled by CommandManager via events)
-      this.requestPush(this.logFilePath, trackingFilePath);
+      // Emit event for commit processed
+      const commit: Commit = {
+        hash: headCommit,
+        message,
+        author,
+        date: commitDate,
+        branch,
+        repoName,
+        repoPath,
+      };
+      this.emit(RepositoryEvent.COMMIT_PROCESSED, commit);
 
-      this.emit(RepositoryEvent.STATUS_UPDATE, {
-        type: "info",
-        message: "Commit logged",
-        details: `Commit ${headCommit.substring(0, 7)} logged from ${repoName}`,
-      });
+      // Show notification if configured
+      if (this.configurationService?.showNotifications()) {
+        this.sendStatusUpdate({
+          type: "normal",
+          message: "Commit logged successfully",
+        });
+      }
+
+      // Request push to tracking repository
+      this.requestPush(this.logFilePath, trackingFilePath);
 
       return success(trackingFilePath);
     } catch (error) {
-      this.emit(RepositoryEvent.ERROR, error, "logging commit details");
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logService?.error(
+        `Failed to log commit details: ${errorMessage}`,
+        error
+      );
+      this.emit(RepositoryEvent.COMMIT_FAILED, repoPath, headCommit, error);
+      return failure(
+        new Error(`Failed to log commit details: ${errorMessage}`)
+      );
     }
   }
 
@@ -736,15 +855,34 @@ Repository Path: ${repoPath}\n\n`;
       await this.context.globalState.update("lastProcessedCommit", commitHash);
 
       // Get additional commit info
-      const message =
-        (await this.gitService?.getCommitMessage(repoPath, commitHash)) ||
-        "Unknown commit message";
-      const author =
-        (await this.gitService?.getCommitAuthorDetails(repoPath, commitHash)) ||
-        "Unknown author";
-      const repoName =
-        (await this.gitService?.getRepoNameFromRemote(repoPath)) ||
-        path.basename(repoPath);
+      let message = "Unknown commit message";
+      let author = "Unknown author";
+      let repoName = path.basename(repoPath);
+
+      if (this.gitService) {
+        const messageResult = await this.gitService.getCommitMessage(
+          repoPath,
+          commitHash
+        );
+        if (messageResult.isSuccess()) {
+          message = messageResult.value;
+        }
+
+        const authorResult = await this.gitService.getCommitAuthorDetails(
+          repoPath,
+          commitHash
+        );
+        if (authorResult.isSuccess()) {
+          author = authorResult.value;
+        }
+
+        const repoNameResult = await this.gitService.getRepoNameFromRemote(
+          repoPath
+        );
+        if (repoNameResult.isSuccess()) {
+          repoName = repoNameResult.value;
+        }
+      }
 
       // Create commit object
       const commit: Commit = {
@@ -835,46 +973,108 @@ Repository Path: ${repoPath}\n\n`;
       const branch = repo.state.HEAD?.name;
       const repoPath = repo.rootUri.fsPath;
 
+      this.logService?.info(
+        `Repository change detected - Commit: ${headCommit}, Branch: ${branch}, Repo: ${repoPath}`
+      );
+
       if (!headCommit) {
-        this.handleError(
-          new Error("No HEAD commit found"),
-          "processing repository change",
-          ErrorType.REPOSITORY
-        );
+        this.logService?.warn("No HEAD commit found in repository");
         return;
       }
 
       // Skip excluded branches
-      if (this.excludedBranches.includes(branch)) {
+      if (this.isBranchExcluded(branch)) {
+        this.logService?.info(
+          `Skipping logging for excluded branch: ${branch}`
+        );
         return;
-      }
-
-      // Always invalidate this repository's status cache on change
-      const repoStatusKey = repoPath;
-      if (this.cache.repositoryStatus.has(repoStatusKey)) {
-        this.cache.repositoryStatus.delete(repoStatusKey);
       }
 
       // Check if commit was already processed
+      // First, check against the last processed commit in memory
       if (this.lastProcessedCommit === headCommit) {
+        this.logService?.info(
+          `Skipping already processed commit: ${headCommit}`
+        );
         return;
       }
 
-      // Process the commit
-      await this.processCommit(repo, headCommit);
+      // Then check the log file to see if this commit is already there
+      try {
+        if (!this.fileSystemService) {
+          this.logService?.error("File system service not initialized");
+          return;
+        }
 
-      // After processing a commit, invalidate relevant caches
-      this.invalidateCache("commitHistory");
-      this.invalidateCache("statistics");
-      this.invalidateCache("unpushedCommits");
+        const logPath = path.join(this.logFilePath, this.logFile);
 
-      // Emit status change event
-      this.emit(RepositoryEvent.REPOSITORY_STATUS_CHANGED, repoPath);
+        // Check if log file exists
+        const existsResult = await this.fileSystemService.exists(logPath);
+        if (existsResult.isFailure()) {
+          this.logService?.error(
+            `Error checking log file: ${existsResult.error.message}`
+          );
+          return;
+        }
+
+        if (existsResult.value) {
+          // Read log file
+          const readResult = await this.fileSystemService.readFile(logPath);
+          if (readResult.isFailure()) {
+            this.logService?.error(
+              `Error reading log file: ${readResult.error.message}`
+            );
+            return;
+          }
+
+          const content = readResult.value;
+
+          // Check if commit hash exists in the log file
+          if (content.includes(`Commit: ${headCommit}`)) {
+            this.logService?.info(
+              `Skipping already logged commit: ${headCommit}`
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        this.logService?.error(`Error checking commit log: ${error}`);
+      }
+
+      // Notify that a commit was detected
+      this.emit(RepositoryEvent.COMMIT_DETECTED, repoPath, headCommit);
+      this.notifyCommitProcessing(
+        path.basename(repoPath),
+        headCommit.substring(0, 7)
+      );
+
+      // Process the new commit
+      this.logService?.info(`Processing new commit: ${headCommit}`);
+      this.lastProcessedCommit = headCommit;
+
+      // Save the last processed commit to the global state
+      await this.context.globalState.update("lastProcessedCommit", headCommit);
+
+      // Log the commit details
+      const result = await this.logCommitDetails(repoPath, headCommit, branch);
+      if (result.isFailure()) {
+        this.logService?.error(
+          `Failed to process commit: ${result.error.message}`
+        );
+        this.emit(
+          RepositoryEvent.COMMIT_FAILED,
+          repoPath,
+          headCommit,
+          result.error
+        );
+      } else {
+        this.logService?.info(`Successfully processed commit: ${headCommit}`);
+      }
     } catch (error) {
-      this.handleError(
-        error,
-        "processing repository change",
-        ErrorType.REPOSITORY
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logService?.error(
+        `Error in processRepositoryChange: ${errorMsg}`,
+        error
       );
     }
   }
@@ -1027,9 +1227,12 @@ Repository Path: ${repoPath}\n\n`;
       const commitHashes: string[] = [];
 
       if (this.gitService) {
-        hasUnpushedCommits = await this.gitService.hasUnpushedCommits(
+        const unpushedResult = await this.gitService.hasUnpushedCommits(
           logFilePath
         );
+        hasUnpushedCommits = unpushedResult.isSuccess()
+          ? unpushedResult.value
+          : false;
       } else {
         // Fallback to basic check
         try {
@@ -1182,36 +1385,35 @@ Repository Path: ${repoPath}\n\n`;
   public async getCommitHistory(
     limit: number = 10
   ): Promise<Result<Commit[], Error>> {
-    try {
-      // Check cache first
-      if (
-        this.cache.commitHistory &&
-        Date.now() - this.cache.commitHistory.timestamp <
-          this.CACHE_TTL.COMMIT_HISTORY
-      ) {
-        const commits = this.cache.commitHistory.data;
-        return success(commits.slice(0, limit));
-      }
+    // Use cache if available and not expired
+    if (
+      this.cache.commitHistory &&
+      Date.now() < this.cache.commitHistory.timestamp
+    ) {
+      const cachedCommits = this.cache.commitHistory.data.slice(0, limit);
+      return success(cachedCommits);
+    }
 
+    try {
       if (!this.fileSystemService) {
-        return failure(new Error("FileSystemService not available"));
+        return failure(new Error("File system service not initialized"));
       }
 
       const trackingFilePath = path.join(this.logFilePath, this.logFile);
 
-      // Check if file exists
-      const fileExistsResult = await this.fileSystemService.exists(
+      // Check if file exists before trying to read it
+      const existsResult = await this.fileSystemService.exists(
         trackingFilePath
       );
-      if (fileExistsResult.isFailure()) {
-        return failure(fileExistsResult.error);
+      if (existsResult.isFailure()) {
+        return failure(existsResult.error);
       }
 
-      if (!fileExistsResult.value) {
+      if (!existsResult.value) {
         return success([]);
       }
 
-      // Read tracking file
+      // Read the file
       const readResult = await this.fileSystemService.readFile(
         trackingFilePath
       );
@@ -1220,51 +1422,72 @@ Repository Path: ${repoPath}\n\n`;
       }
 
       const content = readResult.value;
+      const commits: Commit[] = [];
+
+      // Parse the log file content to extract commits
       const commitBlocks = content
         .split("\n\n")
-        .filter((block) => block.trim());
+        .filter((block) => block.trim().length > 0);
 
-      const commits: Commit[] = [];
       for (const block of commitBlocks) {
-        try {
-          const lines = block.split("\n");
-          if (lines.length < 6) continue;
+        const lines = block.split("\n");
+        const commit: Partial<Commit> = {};
 
-          const hash = lines[0].replace("Commit: ", "").trim();
-          const message = lines[1].replace("Message: ", "").trim();
-          const author = lines[2].replace("Author: ", "").trim();
-          const date = lines[3].replace("Date: ", "").trim();
-          const branch = lines[4].replace("Branch: ", "").trim();
-          const repoName = lines[5].replace("Repository: ", "").trim();
-          const repoPath = lines[6].replace("Repository Path: ", "").trim();
+        for (const line of lines) {
+          const [key, ...valueParts] = line.split(": ");
+          const value = valueParts.join(": "); // Rejoin in case message contains colons
 
-          commits.push({
-            hash,
-            message,
-            author,
-            date,
-            branch,
-            repoName,
-            repoPath,
-          });
+          if (key === "Commit") {
+            commit.hash = value;
+          } else if (key === "Message") {
+            commit.message = value;
+          } else if (key === "Author") {
+            commit.author = value;
+          } else if (key === "Date") {
+            commit.date = value;
+          } else if (key === "Branch") {
+            commit.branch = value;
+          } else if (key === "Repository") {
+            commit.repoName = value;
+          } else if (key === "Repository Path") {
+            commit.repoPath = value;
+          }
+        }
 
-          if (commits.length >= limit) break;
-        } catch (err) {
-          // Skip malformed entries
-          continue;
+        if (
+          commit.hash &&
+          commit.message &&
+          commit.author &&
+          commit.date &&
+          commit.branch &&
+          commit.repoName &&
+          commit.repoPath
+        ) {
+          commits.push(commit as Commit);
         }
       }
 
-      // Store in cache
+      // Sort commits by date (newest first)
+      commits.sort((a, b) => {
+        const dateA = new Date(a.date);
+        const dateB = new Date(b.date);
+        return dateB.getTime() - dateA.getTime();
+      });
+
+      // Cache the results
       this.cache.commitHistory = {
         data: commits,
-        timestamp: Date.now(),
+        timestamp: Date.now() + this.CACHE_TTL.COMMIT_HISTORY,
       };
 
       return success(commits.slice(0, limit));
     } catch (error) {
-      this.handleError(error, "getting commit history", ErrorType.FILESYSTEM);
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logService?.error(
+        `Failed to get commit history: ${errorMsg}`,
+        error
+      );
+      return failure(new Error(`Failed to get commit history: ${errorMsg}`));
     }
   }
 
@@ -1301,7 +1524,10 @@ Repository Path: ${repoPath}\n\n`;
           const remoteName = await this.gitService.getRepoNameFromRemote(
             repoPath
           );
-          repoName = remoteName || repoName;
+
+          if (remoteName.isSuccess()) {
+            repoName = remoteName.value || repoName;
+          }
         } catch (error) {
           // If there's an error getting the remote name, keep using the directory name
         }
@@ -1395,13 +1621,18 @@ Repository Path: ${repoPath}\n\n`;
         repo.state.indexChanges.length > 0;
 
       // Get repository name
-      let repoName: string;
+      let repoName = path.basename(repoPath);
       try {
-        repoName =
-          (await this.gitService?.getRepoNameFromRemote(repoPath)) ||
-          path.basename(repoPath);
+        if (this.gitService) {
+          const remoteNameResult = await this.gitService.getRepoNameFromRemote(
+            repoPath
+          );
+          if (remoteNameResult.isSuccess()) {
+            repoName = remoteNameResult.value || repoName;
+          }
+        }
       } catch (error) {
-        repoName = path.basename(repoPath);
+        // Keep using the directory name if there's an error
       }
 
       const status: RepositoryStatus = {
@@ -1770,38 +2001,67 @@ Repository Path: ${repoPath}\n\n`;
   }
 
   /**
-   * Check for unpushed commits and emit event instead of directly updating UI
+   * Check for unpushed commits in the tracking repository
    * @returns Result indicating if there are unpushed commits
    */
   public async checkUnpushedCommits(): Promise<Result<boolean, Error>> {
     try {
       if (!this.gitService) {
-        return failure(new Error("GitService not available"));
+        return failure(new Error("Git service not initialized"));
       }
 
-      // Use the GitService abstraction
-      const hasUnpushed = await this.gitService.hasUnpushedCommits(
+      if (!this.fileSystemService) {
+        return failure(new Error("File system service not initialized"));
+      }
+
+      // Make sure tracking directory exists before checking
+      const dirExistsResult = await this.fileSystemService.exists(
         this.logFilePath
       );
+      if (dirExistsResult.isFailure()) {
+        return failure(dirExistsResult.error);
+      }
 
-      // Update cache
-      this.cache.unpushedCommits = {
-        data: {
-          count: hasUnpushed ? 1 : 0,
-          commitHashes: [],
-          needsPush: hasUnpushed,
-        },
-        timestamp: Date.now() + this.CACHE_TTL.UNPUSHED_COMMITS,
-      };
+      if (!dirExistsResult.value) {
+        return failure(
+          new Error(`Tracking directory does not exist: ${this.logFilePath}`)
+        );
+      }
 
-      // Emit event for the UI to pick up
-      this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, hasUnpushed);
+      // Check if this is actually a git repository
+      const gitDirResult = await this.fileSystemService.exists(
+        path.join(this.logFilePath, ".git")
+      );
+      if (gitDirResult.isFailure()) {
+        return failure(gitDirResult.error);
+      }
 
-      return success(hasUnpushed);
+      if (!gitDirResult.value) {
+        return failure(new Error(`Not a git repository: ${this.logFilePath}`));
+      }
+
+      // Use gitService to check for unpushed commits
+      const result = await this.gitService.hasUnpushedCommits(this.logFilePath);
+
+      // Notify through events if there are unpushed commits
+      if (result.isSuccess() && result.value) {
+        this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, true);
+        this.notifyErrorStatus(
+          "Unpushed commits",
+          "There are unpushed commits in your tracking repository"
+        );
+      }
+
+      return result;
     } catch (error) {
-      // If error, assume there might be unpushed commits to be safe
-      this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, true);
-      return failure(new Error(`Failed to check unpushed commits: ${error}`));
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logService?.error(
+        `Failed to check unpushed commits: ${errorMsg}`,
+        error
+      );
+      return failure(
+        new Error(`Failed to check unpushed commits: ${errorMsg}`)
+      );
     }
   }
 
