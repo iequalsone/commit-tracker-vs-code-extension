@@ -90,10 +90,79 @@ Phase 4b: Create ConfigurationService
 [x] Support listeners for configuration changes
 
 Phase 4c: Create FileSystemService
-[] Abstract file system operations
-[] Handle file/directory creation, reading, writing
-[] Provide path validation and security checks
-[] Replace direct fs module usage in the codebase
+Step 1: Define Interface
+[] Create /services/interfaces/IFileSystemService.ts
+[] Define core file operations:
+[] Reading files
+[] Writing files
+[] Appending to files
+[] Checking if files/directories exist
+[] Creating directories
+[] Deleting files/directories
+[] Listing directory contents
+[] Add documentation for each method
+[] Include proper error handling with Result pattern
+
+Step 2: Create Implementation
+[] Create /services/fileSystemService.ts
+[] Implement wrapper methods for Node.js fs operations
+[] Add path validation security
+[] Add logging with dependency injection
+[] Implement optional file read caching
+[] Configure proper error handling for all operations
+[] Add atomic write operations where needed
+
+Step 3: Identify Current Usage
+[] Audit direct fs usage in:
+[] setupWizard.ts
+[] setupManager.ts
+[] repositoryManager.ts
+[] gitService.ts
+[] commandManager.ts
+[] fileService.ts (for migration)
+[] Determine patterns and most common operations
+
+Step 4: Migrate Existing FileService
+[] Move functionality from fileService.ts to new FileSystemService
+[] Add deprecated annotations to fileService.ts methods
+[] Maintain backward compatibility
+[] Create migration guide for other components
+
+Step 5: Setup Dependency Injection
+[] Update ExtensionManager to create FileSystemService instance
+[] Add FileSystemService to constructor params of dependent services
+[] Configure default implementation for backward compatibility
+
+Step 6: Refactor Components
+[] Update GitService to use IFileSystemService
+[] Refactor RepositoryManager to use the service
+[] Migrate SetupManager and SetupWizard usage
+[] Update any CommandManager file operations
+
+Step 7: Add Enhanced Functionality
+[] Implement file watcher capabilities
+[] Add safe temporary file handling
+[] Create path normalization utilities
+[] Add recursive directory operations
+[] Implement file permission management
+
+Step 8: Testing Support
+[] Create mock implementation for unit tests
+[] Add in-memory filesystem support for testing
+[] Implement filesystem operation simulation capability
+
+Step 9: Documentation
+[] Add JSDoc comments to all methods
+[] Create usage examples for common scenarios
+[] Document security considerations
+[] Update any README sections on file operations
+
+Step 10: Final Validation
+[] Verify all file operations work correctly
+[] Validate security protections (path traversal, etc.)
+[] Test error handling scenarios
+[] Ensure proper cleanup in dispose method
+[] Check performance with large files/directories
 
 Phase 4d: Create NotificationService
 [] Manage all user notifications
