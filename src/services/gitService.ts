@@ -853,13 +853,13 @@ sleep 3
    * @param repoPath Path to the repository
    * @param command Git command to execute
    * @param scriptName Optional name for the script (defaults to 'git-operation')
-   * @returns Path to the created script
+   * @returns Result containing the path to the created script or error
    */
-  public createGitScript(
+  public async createGitScript(
     repoPath: string,
     command: string,
     scriptName: string = "git-operation"
-  ): string {
+  ): Promise<Result<string, Error>> {
     // Create a temporary shell script
     const scriptPath = path.join(os.tmpdir(), `${scriptName}-${Date.now()}.sh`);
 
@@ -889,8 +889,17 @@ echo "Terminal will close in 3 seconds..."
 sleep 3
 `;
 
-    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
-    return scriptPath;
+    const writeResult = await this.fileSystemService.writeFile(
+      scriptPath,
+      scriptContent,
+      { mode: 0o755 }
+    );
+
+    if (writeResult.isFailure()) {
+      return failure(writeResult.error);
+    }
+
+    return success(scriptPath);
   }
 
   /**
@@ -898,19 +907,25 @@ sleep 3
    * @param repoPath Path to check
    * @returns True if the path is a Git repository
    */
-  public isGitRepository(repoPath: string): boolean {
+  public async isGitRepository(repoPath: string): Promise<boolean> {
     try {
-      if (!fs.existsSync(repoPath)) {
+      // Use fileSystemService to check if .git directory exists
+      const gitDirResult = await this.fileSystemService.exists(
+        path.join(repoPath, ".git")
+      );
+
+      if (gitDirResult.isFailure()) {
+        this.logService?.error(
+          `Error checking Git repository: ${gitDirResult.error}`
+        );
         return false;
       }
 
-      return fs.existsSync(path.join(repoPath, ".git"));
+      return gitDirResult.value;
     } catch (error) {
-      if (this.logService) {
-        this.logService.error(
-          `Error checking if path is a Git repository: ${error}`
-        );
-      }
+      this.logService?.error(
+        `Error checking if path is a Git repository: ${error}`
+      );
       return false;
     }
   }
@@ -1006,7 +1021,7 @@ sleep 3
    * @param options Additional options for the script
    * @returns Path to the created script
    */
-  public createAdvancedPushScript(
+  public async createAdvancedPushScript(
     repoPath: string,
     filePath: string,
     options: {
@@ -1015,7 +1030,7 @@ sleep 3
       autoClose?: boolean;
       timeout?: number;
     } = {}
-  ): string {
+  ): Promise<Result<string, Error>> {
     // Default options
     const defaults = {
       commitMessage: `Update commit log - ${new Date().toISOString()}`,
@@ -1031,91 +1046,78 @@ sleep 3
 
     // Build a more customizable script
     const scriptContent = `#!/bin/bash
-  # Commit-tracker push script
-  ${settings.showOutput ? 'echo "=== Commit Tracker Automatic Push ==="' : ""}
-  ${settings.showOutput ? `echo "Repository: ${repoPath}"` : ""}
-  
-  # Change to the repository directory
-  cd "${repoPath}" || { ${
-      settings.showOutput
-        ? 'echo "Failed to change to repository directory"'
-        : ""
-    }; exit 1; }
-  
-  # Stage the file
-  ${settings.showOutput ? `echo "Adding file: ${filePath}"` : ""}
-  git add "${filePath}"
-  
-  # Commit changes if needed
-  if git status --porcelain | grep -q .; then
-    ${settings.showOutput ? 'echo "Changes detected, committing..."' : ""}
-    git commit -m "${settings.commitMessage}"
-    ${settings.showOutput ? 'echo "Commit successful"' : ""}
-  else
-    ${settings.showOutput ? 'echo "No changes to commit"' : ""}
-    ${settings.autoClose ? `sleep 2` : ""}
-    exit 0
-  fi
-  
-  # Check if remote exists
-  if git remote | grep -q origin; then
-    ${settings.showOutput ? "echo \"Remote 'origin' exists\"" : ""}
-    
-    # Get current branch
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    ${settings.showOutput ? 'echo "Current branch: $CURRENT_BRANCH"' : ""}
-    
-    # Push changes
-    ${
-      settings.showOutput
-        ? 'echo "Pushing changes to origin/$CURRENT_BRANCH..."'
-        : ""
-    }
-    git push
-    
-    # Check if push succeeded
-    if [ $? -eq 0 ]; then
-      ${settings.showOutput ? 'echo "Push successful!"' : ""}
-    else
-      ${
-        settings.showOutput
-          ? 'echo "Push failed, trying with upstream tracking..."'
-          : ""
-      }
-      git push -u origin $CURRENT_BRANCH
-      
-      if [ $? -eq 0 ]; then
-        ${
-          settings.showOutput
-            ? 'echo "Push with upstream tracking successful!"'
-            : ""
-        }
-      else
-        exit 1
-      fi
-    fi
-  else
-    ${
-      settings.showOutput
-        ? "echo \"No remote 'origin' configured, skipping push\""
-        : ""
-    }
-  fi
-  
-  ${settings.showOutput ? 'echo "=== Commit Tracker Push Complete ==="' : ""}
-  ${
-    settings.autoClose
-      ? `${
-          settings.showOutput
-            ? `echo "Terminal will close in ${settings.timeout} seconds..."`
-            : ""
-        }`
-      : ""
-  }
-  ${settings.autoClose ? `sleep ${settings.timeout}` : ""}
-  `;
+# Commit Tracker push operation script
+echo "=== Commit Tracker Push Operation ==="
+echo "Repository: ${repoPath}"
+echo "File: ${filePath}"
 
-    fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
-    return scriptPath;
+# Change to the repository directory
+cd "${repoPath}" || { echo "Failed to change to repository directory"; exit 1; }
+
+# Stage the file
+echo "Adding file: ${filePath}"
+git add "${filePath}"
+ADD_RESULT=$?
+
+if [ $ADD_RESULT -ne 0 ]; then
+  echo "Failed to add file with status $ADD_RESULT"
+  exit 1
+fi
+
+# Check if there are changes to commit
+if ! git status --porcelain | grep -q .; then
+  echo "No changes to commit"
+  exit 0
+fi
+
+# Commit changes
+echo "Committing changes..."
+git commit -m "${settings.commitMessage}"
+COMMIT_RESULT=$?
+
+if [ $COMMIT_RESULT -ne 0 ]; then
+  echo "Failed to commit changes with status $COMMIT_RESULT"
+  exit 1
+fi
+
+# Push changes if remote exists
+if git remote | grep -q origin; then
+  echo "Pushing changes to remote origin..."
+  git push
+  PUSH_RESULT=$?
+  
+  if [ $PUSH_RESULT -ne 0 ]; then
+    echo "Push failed with status $PUSH_RESULT"
+    exit 1
+  fi
+  
+  echo "Push successful!"
+else
+  echo "No remote 'origin' configured, skipping push"
+fi
+
+echo "=== Operation complete ==="
+${
+  settings.autoClose
+    ? `echo "Terminal will close in ${settings.timeout} seconds..."
+sleep ${settings.timeout}`
+    : 'echo "Terminal will remain open"'
+}
+`;
+
+    // Use fileSystemService instead of fs directly
+    const writeResult = await this.fileSystemService.writeFile(
+      scriptPath,
+      scriptContent,
+      {
+        mode: 0o755,
+      }
+    );
+
+    if (writeResult.isFailure()) {
+      return failure(writeResult.error);
+    }
+
+    return success(scriptPath);
   }
 }
