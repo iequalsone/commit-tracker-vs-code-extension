@@ -1,34 +1,62 @@
 /**
- * Generic Result type that represents either success or failure
+ * A type that represents either success with a value or failure with an error
  */
-export type Result<T, E extends Error> = Success<T> | Failure<E>;
+export type Result<T, E> = Success<T> | Failure<E>;
 
 /**
- * Success type containing the successful value
+ * Represents a successful operation with a value
  */
 export class Success<T> {
-  constructor(private readonly _value: T) {}
+  readonly value: T;
+
+  constructor(value: T) {
+    this.value = value;
+  }
 
   isSuccess(): this is Success<T> {
     return true;
   }
 
-  isFailure(): this is never {
+  isFailure(): false {
     return false;
   }
 
-  get value(): T {
-    return this._value;
+  /**
+   * Maps the success value to a new value
+   * @param fn Function to map the value
+   */
+  map<U>(fn: (value: T) => U): Result<U, never> {
+    return success(fn(this.value));
+  }
+
+  /**
+   * Maps the success value to a new Result
+   * @param fn Function to map the value to a new Result
+   */
+  flatMap<U, E>(fn: (value: T) => Result<U, E>): Result<U, E> {
+    return fn(this.value);
+  }
+
+  /**
+   * Executes a function with the success value
+   * @param fn Function to execute with the value
+   */
+  match<U>(onSuccess: (value: T) => U, _onFailure: (error: never) => U): U {
+    return onSuccess(this.value);
   }
 }
 
 /**
- * Failure type containing the error
+ * Represents a failed operation with an error
  */
-export class Failure<E extends Error> {
-  constructor(private readonly _error: E) {}
+export class Failure<E> {
+  readonly error: E;
 
-  isSuccess(): this is never {
+  constructor(error: E) {
+    this.error = error;
+  }
+
+  isSuccess(): false {
     return false;
   }
 
@@ -36,23 +64,49 @@ export class Failure<E extends Error> {
     return true;
   }
 
-  get error(): E {
-    return this._error;
+  /**
+   * Maps the failure error to a new value (no-op for Failure)
+   */
+  map<U>(_fn: (value: never) => U): Result<never, E> {
+    return this as unknown as Result<never, E>;
+  }
+
+  /**
+   * Maps the failure error to a new Result (no-op for Failure)
+   */
+  flatMap<U, F>(_fn: (value: never) => Result<U, F>): Result<never, E> {
+    return this as unknown as Result<never, E>;
+  }
+
+  /**
+   * Maps the error to a new error
+   * @param fn Function to map the error
+   */
+  mapError<F>(fn: (error: E) => F): Result<never, F> {
+    return failure(fn(this.error));
+  }
+
+  /**
+   * Executes a function with the failure error
+   * @param fn Function to execute with the error
+   */
+  match<U>(_onSuccess: (value: never) => U, onFailure: (error: E) => U): U {
+    return onFailure(this.error);
   }
 }
 
 /**
- * Create a success result
- * @param value The successful value
+ * Creates a success result
+ * @param value The success value
  */
-export function success<T>(value: T): Success<T> {
+export function success<T>(value: T): Result<T, never> {
   return new Success(value);
 }
 
 /**
- * Create a failure result
- * @param error The error
+ * Creates a failure result
+ * @param error The error value
  */
-export function failure<E extends Error>(error: E): Failure<E> {
+export function failure<E>(error: E): Result<never, E> {
   return new Failure(error);
 }
