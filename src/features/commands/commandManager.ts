@@ -111,83 +111,6 @@ export class CommandManager implements vscode.Disposable {
   }
 
   /**
-   * Handle push requests from the RepositoryManager
-   * @param logFilePath Path to the log directory
-   * @param trackingFilePath Complete path to the tracking file
-   */
-  private async handlePushRequest(
-    logFilePath: string,
-    trackingFilePath: string
-  ): Promise<void> {
-    try {
-      if (!this.fileSystemService) {
-        this.logService.error("FileSystemService is not initialized");
-        return;
-      }
-
-      this.logService.info("Push request received from RepositoryManager");
-      this.statusManager.setProcessingStatus("Pushing...");
-
-      // Create and execute a script to push changes
-      const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
-      const scriptContent = `#!/bin/bash
-# Automatic push script from Commit Tracker
-echo "=== Commit Tracker Push Operation ==="
-echo "Current directory: ${logFilePath}"
-cd "${logFilePath}"
-echo "Git status:"
-git status
-echo "Pushing changes..."
-git push
-PUSH_RESULT=$?
-echo "Push complete, new status:"
-git status
-
-if [ $PUSH_RESULT -eq 0 ]; then
-  echo "Push successful!"
-else
-  echo "Push failed with status $PUSH_RESULT"
-  echo "You may need to push manually or set up credentials"
-fi
-
-echo "Terminal will close in 5 seconds..."
-sleep 5
-`;
-
-      // Write script file
-      const writeResult = await this.fileSystemService.writeFile(
-        scriptPath,
-        scriptContent,
-        { mode: 0o755 }
-      );
-
-      if (writeResult.isFailure()) {
-        throw writeResult.error;
-      }
-
-      // Use VS Code terminal to show output
-      this.createGitOperationTerminal(
-        logFilePath,
-        scriptContent,
-        "Commit Tracker Push"
-      );
-
-      // Update status after delay to allow push to complete
-      setTimeout(() => {
-        this.statusManager.updateUnpushedStatus();
-      }, 10000);
-    } catch (error) {
-      this.logService.error(`Failed to handle push request: ${error}`);
-      this.statusManager.setErrorStatus("Push Failed");
-
-      // Restore normal status after delay
-      setTimeout(() => {
-        this.statusManager.setTrackingStatus();
-      }, 5000);
-    }
-  }
-
-  /**
    * Registers all commands for the extension
    */
   public registerCommands(): void {
@@ -902,39 +825,55 @@ sleep 5
    * @param terminalName Optional custom terminal name
    * @returns The created terminal
    */
-  public createGitOperationTerminal(
+  public async createGitOperationTerminal(
     workingDirectory: string,
     scriptContent: string,
     terminalName: string = "Commit Tracker"
-  ): vscode.Terminal {
+  ): Promise<vscode.Terminal | undefined> {
     this.logService.info(
       `Creating Git operation terminal for: ${workingDirectory}`
     );
 
-    // Create temporary script file
-    const scriptPath = path.join(os.tmpdir(), `git-operation-${Date.now()}.sh`);
+    if (!this.fileSystemService) {
+      this.logService.error("FileSystemService is not available");
+      return undefined;
+    }
 
     try {
-      fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+      // Create temporary script file
+      const scriptPath = path.join(
+        os.tmpdir(),
+        `git-operation-${Date.now()}.sh`
+      );
 
-      // Create and configure terminal
+      // Write script content to file with executable permissions
+      const writeResult = await this.fileSystemService.writeFile(
+        scriptPath,
+        scriptContent,
+        { mode: 0o755 }
+      );
+
+      if (writeResult.isFailure()) {
+        this.logService.error(
+          `Failed to write script file: ${writeResult.error}`
+        );
+        return undefined;
+      }
+
+      // Create and show terminal
       const terminal = vscode.window.createTerminal({
         name: terminalName,
-        hideFromUser: false,
-        location: vscode.TerminalLocation.Panel,
-        isTransient: true,
+        cwd: workingDirectory,
       });
 
-      terminal.show(false);
-      terminal.sendText(`bash "${scriptPath}" && exit || exit`);
+      terminal.show();
+      terminal.sendText(`"${scriptPath}" && exit`);
 
-      // Clean up script after delay
+      // Clean up script after execution
       setTimeout(() => {
-        try {
-          fs.unlinkSync(scriptPath);
-        } catch (e) {
-          // Ignore cleanup errors
-        }
+        this.fileSystemService?.deleteFile(scriptPath).catch((error) => {
+          this.logService.error(`Failed to clean up script file: ${error}`);
+        });
       }, 10000);
 
       return terminal;
@@ -942,7 +881,80 @@ sleep 5
       this.logService.error(
         `Failed to create Git operation terminal: ${error}`
       );
-      throw new Error(`Failed to create Git operation terminal: ${error}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Command handler: Handle push request
+   */
+  private async handlePushRequest(
+    logFilePath: string,
+    trackingFilePath: string
+  ): Promise<void> {
+    try {
+      if (!this.fileSystemService) {
+        throw new Error("FileSystemService is not initialized");
+      }
+
+      this.logService.info("Push request received from RepositoryManager");
+      this.statusManager.setProcessingStatus("Pushing...");
+
+      // Create script content
+      const scriptContent = `#!/bin/bash
+# Automatic push script from Commit Tracker
+echo "=== Commit Tracker Push Operation ==="
+echo "Current directory: ${logFilePath}"
+cd "${logFilePath}"
+echo "Git status:"
+git status
+echo "Pushing changes..."
+git push
+PUSH_RESULT=$?
+echo "Push complete, new status:"
+git status
+
+if [ $PUSH_RESULT -eq 0 ]; then
+  echo "Push successful!"
+else
+  echo "Push failed with status $PUSH_RESULT"
+  echo "You may need to push manually or set up credentials"
+fi
+
+echo "Terminal will close in 5 seconds..."
+sleep 5
+`;
+
+      // Create and execute a script to push changes
+      const createScriptResult = await this.gitService.createGitScript(
+        logFilePath,
+        "push",
+        "Commit Tracker Push"
+      );
+
+      if (createScriptResult.isFailure()) {
+        throw createScriptResult.error;
+      }
+
+      // Use VS Code terminal to show output
+      this.createGitOperationTerminal(
+        logFilePath,
+        scriptContent,
+        "Commit Tracker Push"
+      );
+
+      // Update status after delay to allow push to complete
+      setTimeout(() => {
+        this.statusManager.refresh();
+      }, 10000);
+    } catch (error) {
+      this.logService.error(`Failed to handle push request: ${error}`);
+      this.statusManager.setErrorStatus("Push Failed");
+
+      // Restore normal status after delay
+      setTimeout(() => {
+        this.statusManager.refresh();
+      }, 5000);
     }
   }
 }
