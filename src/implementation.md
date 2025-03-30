@@ -129,9 +129,9 @@ Step 4: Migrate Existing FileService
 [x] Create migration guide for other components
 
 Step 5: Setup Dependency Injection
-[] Update ExtensionManager to create FileSystemService instance
-[] Add FileSystemService to constructor params of dependent services
-[] Configure default implementation for backward compatibility
+[x] Update ExtensionManager to create FileSystemService instance
+[x] Add FileSystemService to constructor params of dependent services
+[x] Configure default implementation for backward compatibility
 
 Step 6: Refactor Components
 [] Update GitService to use IFileSystemService
