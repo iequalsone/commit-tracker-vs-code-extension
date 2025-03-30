@@ -7,6 +7,7 @@ import { ILogService } from "./interfaces/ILogService";
 import { IWorkspaceProvider } from "./interfaces/IWorkspaceProvider";
 import { IFileSystemService } from "./interfaces/IFileSystemService";
 import { promisify } from "util";
+import { failure, Result, success } from "../utils/results";
 
 // Cache interface for storing git operation results
 interface GitCache {
@@ -22,12 +23,26 @@ interface GitCache {
 class DefaultFileSystemService implements IFileSystemService {
   private fs = require("fs");
 
-  writeFile(path: string, content: string, options?: { mode?: number }): void {
-    this.fs.writeFileSync(path, content, options);
+  async writeFile(
+    path: string,
+    content: string,
+    options?: { append?: boolean; mode?: number; atomic?: boolean }
+  ): Promise<Result<void, Error>> {
+    try {
+      this.fs.writeFileSync(path, content, options);
+      return success(undefined);
+    } catch (error) {
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 
-  exists(path: string): boolean {
-    return this.fs.existsSync(path);
+  async exists(path: string): Promise<Result<boolean, Error>> {
+    try {
+      const exists = this.fs.existsSync(path);
+      return success(exists);
+    } catch (error) {
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 }
 
@@ -410,12 +425,16 @@ export class GitService {
    * @param filePath Path to the file that was changed
    * @returns The path to the created script
    */
-  public createPushScript(repoPath: string, filePath: string): string {
-    // Create a temporary shell script with detailed logging
-    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+  public async createPushScript(
+    repoPath: string,
+    filePath: string
+  ): Promise<string> {
+    try {
+      // Create a temporary shell script with detailed logging
+      const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
 
-    // Write a more streamlined script for terminal use that will self-close
-    const scriptContent = `#!/bin/bash
+      // Write a more streamlined script for terminal use that will self-close
+      const scriptContent = `#!/bin/bash
 # Commit-tracker push script
 echo "=== Commit Tracker Automatic Push ==="
 echo "Repository: ${repoPath}"
@@ -472,10 +491,21 @@ echo "Terminal will close in 3 seconds..."
 sleep 3
 `;
 
-    this.fileSystemService.writeFile(scriptPath, scriptContent, {
-      mode: 0o755,
-    });
-    return scriptPath;
+      // Use fileSystemService to write the script
+      this.fileSystemService.writeFile(scriptPath, scriptContent, {
+        mode: 0o755,
+      });
+
+      return scriptPath;
+    } catch (error) {
+      // Log the error if logger is available
+      if (this.logService) {
+        this.logService.error("Failed to create push script", error);
+      }
+
+      // Throw the error instead of returning a Result object
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
