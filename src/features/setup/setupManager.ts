@@ -5,6 +5,7 @@ import { RepositoryManager } from "../repository/repositoryManager";
 import { GitService } from "../../services/gitService";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
+import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
 
 /**
  * Manages the extension setup process and configuration validation
@@ -15,19 +16,22 @@ export class SetupManager {
   private readonly configurationService?: IConfigurationService;
   private gitService?: GitService;
   private repositoryManager?: RepositoryManager;
+  private fileSystemService?: IFileSystemService;
 
   constructor(
     context: vscode.ExtensionContext,
     logService: ILogService,
     configurationService?: IConfigurationService,
     gitService?: GitService,
-    repositoryManager?: RepositoryManager
+    repositoryManager?: RepositoryManager,
+    fileSystemService?: IFileSystemService
   ) {
     this.context = context;
     this.logService = logService;
     this.configurationService = configurationService;
     this.gitService = gitService;
     this.repositoryManager = repositoryManager;
+    this.fileSystemService = fileSystemService;
   }
 
   /**
@@ -240,26 +244,54 @@ export class SetupManager {
    */
   public async initializeRepository(folderPath: string): Promise<boolean> {
     try {
+      if (!this.fileSystemService) {
+        this.logService.error("FileSystemService is not initialized");
+        return false;
+      }
+
       this.logService.info(`Initializing repository at ${folderPath}`);
 
       // Check if folder exists
-      if (!fs.existsSync(folderPath)) {
+      const folderExistsResult = await this.fileSystemService.exists(
+        folderPath
+      );
+      if (folderExistsResult.isFailure()) {
+        this.logService.error(
+          `Error checking if folder exists: ${folderExistsResult.error}`
+        );
+        return false;
+      }
+
+      if (!folderExistsResult.value) {
         this.logService.error(`Folder does not exist: ${folderPath}`);
         return false;
       }
 
-      // Check if it's already a git repository
-      const isGitRepo = await this.verifyGitSetup(folderPath);
-
-      if (!isGitRepo) {
-        // Initialize git repository
-        await this.initializeGitRepo(folderPath);
-      }
-
       // Create default log file if it doesn't exist
       const logFile = path.join(folderPath, "commit-tracker.log");
-      if (!fs.existsSync(logFile)) {
-        fs.writeFileSync(logFile, "# Commit Tracker Log File\n\n", "utf8");
+
+      const fileExistsResult = await this.fileSystemService.exists(logFile);
+
+      if (fileExistsResult.isFailure()) {
+        this.logService.error(
+          `Error checking if log file exists: ${fileExistsResult.error}`
+        );
+        return false;
+      }
+
+      if (!fileExistsResult.value) {
+        const writeResult = await this.fileSystemService.writeFile(
+          logFile,
+          "# Commit Tracker Log File\n\n"
+        );
+
+        if (writeResult.isFailure()) {
+          this.logService.error(
+            `Failed to create log file: ${writeResult.error}`
+          );
+          return false;
+        }
+
         this.logService.info(`Created log file at ${logFile}`);
       }
 
