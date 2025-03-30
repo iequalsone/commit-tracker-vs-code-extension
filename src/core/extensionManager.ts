@@ -20,6 +20,7 @@ import { IFileSystemService } from "../services/interfaces/IFileSystemService";
 import { ConfigurationService } from "../services/configurationService";
 import { IConfigurationService } from "../services/interfaces/IConfigurationService";
 import { FileSystemService } from "../services/fileSystemService";
+import { DisposableManager } from "../utils/DisposableManager";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -27,7 +28,7 @@ import { FileSystemService } from "../services/fileSystemService";
  */
 export class ExtensionManager {
   private context: vscode.ExtensionContext;
-  private disposables: vscode.Disposable[] = [];
+  private disposableManager: DisposableManager;
 
   // Feature managers
   private setupManager: SetupManager;
@@ -40,6 +41,7 @@ export class ExtensionManager {
   private logService: LogService;
   private errorHandlingService: ErrorHandlingService;
   private configurationService: IConfigurationService;
+  private fileSystemService: IFileSystemService;
 
   /**
    * Creates a new instance of the ExtensionManager
@@ -47,6 +49,7 @@ export class ExtensionManager {
    */
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    this.disposableManager = DisposableManager.getInstance();
 
     // Initialize services first (no dependencies)
     this.logService = new LogService();
@@ -54,7 +57,16 @@ export class ExtensionManager {
       "commitTracker",
       this.logService
     );
-    this.gitService = new GitService();
+
+    this.fileSystemService = new FileSystemService({
+      logService: this.logService,
+      cacheEnabled: true,
+    });
+
+    this.gitService = new GitService({
+      logService: this.logService,
+      fileSystemService: this.fileSystemService,
+    });
     this.errorHandlingService = new ErrorHandlingService(this.logService);
 
     // Initialize managers (may depend on services)
@@ -64,32 +76,46 @@ export class ExtensionManager {
       this.context,
       this.gitService,
       this.logService,
-      undefined, // repositoryManager will be connected later
-      this.configurationService // pass configurationService
+      undefined,
+      this.configurationService
     );
 
-    this.setupManager = new SetupManager(context, this.logService);
+    this.setupManager = new SetupManager(
+      context,
+      this.logService,
+      this.configurationService,
+      this.gitService,
+      undefined,
+      this.fileSystemService
+    );
+
     this.repositoryManager = new RepositoryManager(
       context,
       this.statusManager,
       undefined,
       this.errorHandlingService,
-      this.gitService
+      this.gitService,
+      this.configurationService,
+      this.logService,
+      this.fileSystemService
     );
+
     this.commandManager = new CommandManager(
       context,
       this.gitService,
       this.logService,
       this.setupManager,
       this.statusManager,
-      this.repositoryManager
+      this.repositoryManager,
+      this.fileSystemService
     );
 
     // Register disposables
-    this.disposables.push(this.logService);
-    this.disposables.push(this.statusManager);
-    this.disposables.push(this.commandManager);
-    this.disposables.push(this.errorHandlingService);
+    this.disposableManager.register(this.logService);
+    this.disposableManager.register(this.statusManager);
+    this.disposableManager.register(this.commandManager);
+    this.disposableManager.register(this.errorHandlingService);
+    this.disposableManager.register(this.fileSystemService);
   }
 
   /**
@@ -187,10 +213,7 @@ export class ExtensionManager {
     };
 
     // Create file system service
-    const fileSystemService = new FileSystemService({
-      logService: this.logService,
-      cacheEnabled: true, // Enable caching for better performance
-    });
+    const fileSystemService = this.fileSystemService;
 
     // Initialize with all dependencies
     this.gitService = new GitService({
@@ -291,7 +314,7 @@ export class ExtensionManager {
     // Step 4: Set up event listeners
     this.registerEventListeners();
 
-    this.disposables.push(
+    this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<boolean>(
         "enabled",
         (newValue) => {
@@ -307,7 +330,29 @@ export class ExtensionManager {
             }
           }
         }
-      ),
+      )
+    );
+
+    this.disposableManager.register(
+      this.configurationService.onDidChangeConfigurationValue<boolean>(
+        "enabled",
+        (newValue) => {
+          if (newValue) {
+            this.logService.info("Commit tracking enabled");
+            if (this.repositoryManager) {
+              this.repositoryManager.initialize();
+            }
+          } else {
+            this.logService.info("Commit tracking disabled");
+            if (this.statusManager) {
+              this.statusManager.setStoppedStatus();
+            }
+          }
+        }
+      )
+    );
+
+    this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<number>(
         "updateFrequencyMinutes",
         (newValue) => {
@@ -318,15 +363,24 @@ export class ExtensionManager {
             this.statusManager.startStatusUpdateInterval();
           }
         }
-      ),
+      )
+    );
+
+    this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFilePath",
         () => this.handleLogConfigChange()
-      ),
+      )
+    );
+
+    this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFile",
         () => this.handleLogConfigChange()
-      ),
+      )
+    );
+
+    this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string[]>(
         "excludedBranches",
         (newValue) => {
@@ -341,9 +395,10 @@ export class ExtensionManager {
             );
           }
         }
-      ),
-      fileSystemService
+      )
     );
+
+    this.disposableManager.register(this.fileSystemService);
   }
 
   /**
@@ -476,7 +531,7 @@ export class ExtensionManager {
       );
 
       // Add to disposables for cleanup
-      this.disposables.push(configDisposable);
+      this.disposableManager.register(configDisposable);
     }
 
     // Additional event listeners can be added here
@@ -497,10 +552,6 @@ export class ExtensionManager {
    */
   public dispose(): void {
     this.logService.info("Disposing Commit Tracker extension...");
-
-    for (const disposable of this.disposables) {
-      disposable.dispose();
-    }
-    this.disposables = [];
+    this.disposableManager.dispose();
   }
 }
