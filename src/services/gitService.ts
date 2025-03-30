@@ -212,15 +212,15 @@ export class GitService {
    * Gets the commit message for a specific commit
    * @param repoPath Path to the repository
    * @param commitHash Commit hash to get the message for
-   * @returns The commit message
+   * @returns Result containing the commit message or an error
    */
   public async getCommitMessage(
     repoPath: string,
     commitHash: string
-  ): Promise<string> {
+  ): Promise<Result<string, Error>> {
     try {
       if (!commitHash) {
-        throw new Error("Commit hash is required");
+        return failure(new Error("Commit hash is required"));
       }
 
       // Generate cache key - commit messages never change for a given hash
@@ -229,7 +229,7 @@ export class GitService {
       // Try to get from cache with long TTL
       const cachedValue = this.getFromCache(cacheKey, 24 * 60 * 60 * 1000); // 24 hours TTL
       if (cachedValue !== null) {
-        return cachedValue;
+        return success(cachedValue);
       }
 
       // Get the commit message using the git show command
@@ -242,9 +242,10 @@ export class GitService {
       // Store in cache
       this.setInCache(cacheKey, message);
 
-      return message;
+      return success(message);
     } catch (error) {
-      throw error;
+      this.logService?.error(`Error getting commit message: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -252,15 +253,15 @@ export class GitService {
    * Gets the author details for a specific commit
    * @param repoPath Path to the repository
    * @param commitHash Commit hash to get the author for
-   * @returns The author details in "Name <email>" format
+   * @returns Result containing the author details or an error
    */
   public async getCommitAuthorDetails(
     repoPath: string,
     commitHash: string
-  ): Promise<string> {
+  ): Promise<Result<string, Error>> {
     try {
       if (!commitHash) {
-        throw new Error("Commit hash is required");
+        return failure(new Error("Commit hash is required"));
       }
 
       // Generate cache key - author never changes for a given hash
@@ -269,7 +270,7 @@ export class GitService {
       // Try to get from cache with long TTL
       const cachedValue = this.getFromCache(cacheKey, 24 * 60 * 60 * 1000); // 24 hours TTL
       if (cachedValue !== null) {
-        return cachedValue;
+        return success(cachedValue);
       }
 
       // Get the author using the git show command
@@ -285,18 +286,21 @@ export class GitService {
       // Store in cache
       this.setInCache(cacheKey, author);
 
-      return author;
+      return success(author);
     } catch (error) {
-      throw error;
+      this.logService?.error(`Error getting commit author details: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
   /**
    * Gets the repository name from the remote URL
    * @param repoPath Path to the repository
-   * @returns The repository name
+   * @returns Result containing the repository name or an error
    */
-  public async getRepoNameFromRemote(repoPath: string): Promise<string> {
+  public async getRepoNameFromRemote(
+    repoPath: string
+  ): Promise<Result<string, Error>> {
     try {
       // Generate cache key
       const cacheKey = `repo:name:${repoPath}`;
@@ -304,7 +308,7 @@ export class GitService {
       // Try to get from cache with longer TTL
       const cachedValue = this.getFromCache(cacheKey, 30 * 60 * 1000); // 30 minutes TTL
       if (cachedValue !== null) {
-        return cachedValue;
+        return success(cachedValue);
       }
 
       // Get the remote URL
@@ -317,12 +321,12 @@ export class GitService {
           .trim();
       } catch (error) {
         // Silently handle the case where there's no remote configured
-        return path.basename(repoPath);
+        return success(path.basename(repoPath));
       }
 
       // If no remote origin is found, use the directory name
       if (!remoteUrl) {
-        return path.basename(repoPath);
+        return success(path.basename(repoPath));
       }
 
       // Remove .git suffix if present
@@ -336,10 +340,13 @@ export class GitService {
       // Store in cache
       this.setInCache(cacheKey, repoName);
 
-      return repoName;
+      return success(repoName);
     } catch (error) {
-      // Fall back to using the directory name
-      return path.basename(repoPath);
+      // Even in case of error, we fall back to using the directory name
+      this.logService?.warn(
+        `Error getting repo name from remote, using directory name: ${error}`
+      );
+      return success(path.basename(repoPath));
     }
   }
 
