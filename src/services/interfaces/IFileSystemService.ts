@@ -206,4 +206,9 @@ export interface IFileSystemService extends vscode.Disposable {
    * @param path Optional specific path to clear from cache
    */
   clearCache(path?: string): void;
+
+  createExecutableScript(
+    content: string,
+    options?: { prefix?: string }
+  ): Promise<Result<string, Error>>;
 }
