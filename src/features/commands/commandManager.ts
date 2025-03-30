@@ -10,6 +10,7 @@ import {
   RepositoryManager,
 } from "../repository/repositoryManager";
 import { ILogService } from "../../services/interfaces/ILogService";
+import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
 
 /**
  * Manages all extension commands and their registration
@@ -21,6 +22,7 @@ export class CommandManager implements vscode.Disposable {
   private readonly setupManager: SetupManager;
   private readonly statusManager: StatusManager;
   private readonly repositoryManager: RepositoryManager;
+  private fileSystemService?: IFileSystemService;
   private disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -29,7 +31,8 @@ export class CommandManager implements vscode.Disposable {
     logService: ILogService,
     setupManager: SetupManager,
     statusManager: StatusManager,
-    repositoryManager: RepositoryManager
+    repositoryManager: RepositoryManager,
+    fileSystemService?: IFileSystemService
   ) {
     this.context = context;
     this.gitService = gitService;
@@ -37,6 +40,7 @@ export class CommandManager implements vscode.Disposable {
     this.setupManager = setupManager;
     this.statusManager = statusManager;
     this.repositoryManager = repositoryManager;
+    this.fileSystemService = fileSystemService;
   }
 
   public setupRepositoryEventListeners(): void {
@@ -116,12 +120,16 @@ export class CommandManager implements vscode.Disposable {
     trackingFilePath: string
   ): Promise<void> {
     try {
+      if (!this.fileSystemService) {
+        this.logService.error("FileSystemService is not initialized");
+        return;
+      }
+
       this.logService.info("Push request received from RepositoryManager");
       this.statusManager.setProcessingStatus("Pushing...");
 
       // Create and execute a script to push changes
       const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
-
       const scriptContent = `#!/bin/bash
 # Automatic push script from Commit Tracker
 echo "=== Commit Tracker Push Operation ==="
@@ -146,10 +154,19 @@ echo "Terminal will close in 5 seconds..."
 sleep 5
 `;
 
-      fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
+      // Write script file
+      const writeResult = await this.fileSystemService.writeFile(
+        scriptPath,
+        scriptContent,
+        { mode: 0o755 }
+      );
+
+      if (writeResult.isFailure()) {
+        throw writeResult.error;
+      }
 
       // Use VS Code terminal to show output
-      const terminal = this.createGitOperationTerminal(
+      this.createGitOperationTerminal(
         logFilePath,
         scriptContent,
         "Commit Tracker Push"
