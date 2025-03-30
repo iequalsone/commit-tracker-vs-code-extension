@@ -56,7 +56,7 @@ export class SetupManager {
    * Validates the current configuration
    * @returns True if configuration is valid, false otherwise
    */
-  public validateConfiguration(): boolean {
+  public async validateConfiguration(): Promise<boolean> {
     this.logService.info("Validating configuration");
 
     if (this.configurationService) {
@@ -86,15 +86,35 @@ export class SetupManager {
     // Validate log file path exists
     const logFilePath = config.get<string>("logFilePath");
     if (logFilePath) {
-      try {
-        const fs = require("fs");
-        if (!fs.existsSync(logFilePath)) {
-          this.logService.warn(`Log directory does not exist: ${logFilePath}`);
+      if (!this.fileSystemService) {
+        try {
+          const fs = require("fs");
+          if (!fs.existsSync(logFilePath)) {
+            this.logService.warn(
+              `Log directory does not exist: ${logFilePath}`
+            );
+            return false;
+          }
+        } catch (error) {
+          this.logService.error(`Error checking log directory: ${error}`);
           return false;
         }
-      } catch (error) {
-        this.logService.error(`Error checking log directory: ${error}`);
-        return false;
+      } else {
+        // Use FileSystemService if available
+        try {
+          const pathExistsResult = await this.fileSystemService.exists(
+            logFilePath
+          );
+          if (pathExistsResult.isFailure() || !pathExistsResult.value) {
+            this.logService.warn(
+              `Log directory does not exist: ${logFilePath}`
+            );
+            return false;
+          }
+        } catch (error) {
+          this.logService.error(`Error checking log directory: ${error}`);
+          return false;
+        }
       }
     }
 
@@ -220,17 +240,39 @@ export class SetupManager {
    */
   public async verifyGitSetup(repoPath: string): Promise<boolean> {
     try {
-      const fs = require("fs");
-      const path = require("path");
+      if (this.fileSystemService) {
+        // Use FileSystemService
+        const gitDirResult = await this.fileSystemService.exists(
+          path.join(repoPath, ".git")
+        );
 
-      // Check if it's a git repository
-      if (!fs.existsSync(path.join(repoPath, ".git"))) {
-        this.logService.warn(`${repoPath} is not a Git repository`);
-        return false;
+        if (gitDirResult.isFailure()) {
+          this.logService.error(
+            `Error checking if git directory exists: ${gitDirResult.error}`
+          );
+          return false;
+        }
+
+        if (!gitDirResult.value) {
+          this.logService.warn(`${repoPath} is not a Git repository`);
+          return false;
+        }
+
+        return true;
+      } else {
+        // Fallback to direct fs usage
+        const fs = require("fs");
+        const path = require("path");
+
+        // Check if it's a git repository
+        if (!fs.existsSync(path.join(repoPath, ".git"))) {
+          this.logService.warn(`${repoPath} is not a Git repository`);
+          return false;
+        }
+
+        // More git validation could be added here
+        return true;
       }
-
-      // More git validation could be added here
-      return true;
     } catch (error) {
       this.logService.error(`Error verifying Git setup: ${error}`);
       return false;
