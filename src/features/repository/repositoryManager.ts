@@ -20,6 +20,7 @@ import {
 } from "../../services/errorHandlingService";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
+import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
 
 /**
  * Repository status information
@@ -100,6 +101,7 @@ export class RepositoryManager extends EventEmitter {
   private gitService: GitService | undefined;
   private configurationService?: IConfigurationService;
   private logService?: ILogService;
+  private fileSystemService?: IFileSystemService;
   private _configChangeDisposable?: vscode.Disposable;
 
   private cache: {
@@ -154,7 +156,8 @@ export class RepositoryManager extends EventEmitter {
     errorHandlingService?: ErrorHandlingService,
     gitService?: GitService,
     configurationService?: IConfigurationService,
-    logService?: ILogService
+    logService?: ILogService,
+    fileSystemService?: IFileSystemService
   ) {
     super();
     this.context = context;
@@ -163,6 +166,7 @@ export class RepositoryManager extends EventEmitter {
     this.gitService = gitService;
     this.configurationService = configurationService;
     this.logService = logService;
+    this.fileSystemService = fileSystemService;
     this.disposableManager = DisposableManager.getInstance();
     this.lastProcessedCommit = context.globalState.get(
       "lastProcessedCommit",
@@ -634,43 +638,30 @@ Repository Path: ${commit.repoPath}\n\n`;
   Repository: ${repoName}
   Repository Path: ${repoPath}\n\n`;
 
-      // Write to log file
-      const config = vscode.workspace.getConfiguration("commitTracker");
-      const logFilePath = config.get<string>("logFilePath") || "";
-      const logFile = config.get<string>("logFile") || "commit-tracker.log";
-      const trackingFilePath = path.join(logFilePath, logFile);
+      const trackingFilePath = path.join(this.logFilePath, this.logFile);
 
-      this.logService?.info(`Writing log to: ${trackingFilePath}`);
-
-      try {
-        if (!validatePath(trackingFilePath)) {
-          throw new Error("Invalid tracking file path.");
-        }
-        ensureDirectoryExists(path.dirname(trackingFilePath));
-        this.logService?.info(`Ensured directory exists: ${logFilePath}`);
-      } catch (err) {
-        return failure(new Error(`Failed to ensure directory exists: ${err}`));
+      // Ensure directory exists
+      if (!this.fileSystemService) {
+        return failure(new Error("FileSystemService is not available"));
       }
 
-      try {
-        await appendToFile(trackingFilePath, logMessage);
-        this.logService?.info(
-          `Successfully logged commit details to ${logFile}`
-        );
-      } catch (err) {
-        return failure(new Error(`Failed to write to ${logFile}: ${err}`));
+      const dirResult = await this.fileSystemService.ensureDirectory(
+        path.dirname(trackingFilePath)
+      );
+
+      if (dirResult.isFailure()) {
+        return failure(dirResult.error);
       }
 
-      // Request push operation via CommandManager
-      this.requestPush(logFilePath, trackingFilePath);
+      // Append to file
+      const appendResult = await this.fileSystemService.appendToFile(
+        trackingFilePath,
+        logMessage
+      );
 
-      // Notify via status update
-      this.sendStatusUpdate({
-        type: "info",
-        message: "Commit logged successfully",
-        details: `${repoName}: ${headCommit.substring(0, 7)}`,
-        duration: 3000,
-      });
+      if (appendResult.isFailure()) {
+        return failure(appendResult.error);
+      }
 
       return success(trackingFilePath);
     } catch (err) {
@@ -681,7 +672,7 @@ Repository Path: ${commit.repoPath}\n\n`;
         ErrorType.FILESYSTEM,
         true
       );
-      return failure(error);
+      return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
@@ -1182,34 +1173,33 @@ Repository Path: ${commit.repoPath}\n\n`;
     limit: number = 10
   ): Promise<Result<Commit[], Error>> {
     try {
-      // Check cache first
-      const now = Date.now();
-      if (
-        this.cache.commitHistory &&
-        now - this.cache.commitHistory.timestamp < this.CACHE_TTL.COMMIT_HISTORY
-      ) {
-        // If requested limit is larger than what we have cached, get fresh data
-        if (limit <= this.cache.commitHistory.data.length) {
-          return success(this.cache.commitHistory.data.slice(0, limit));
-        }
+      const trackingFilePath = path.join(this.logFilePath, this.logFile);
+
+      // Check if file exists
+      if (!this.fileSystemService) {
+        return failure(new Error("FileSystemService is not available"));
       }
 
-      const config = vscode.workspace.getConfiguration("commitTracker");
-      const logFilePath = config.get<string>("logFilePath");
-      const logFile = config.get<string>("logFile", "commit-tracker.log");
-
-      if (!logFilePath) {
-        return failure(new Error("Log file path not configured"));
+      const existsResult = await this.fileSystemService.exists(
+        trackingFilePath
+      );
+      if (existsResult.isFailure()) {
+        return failure(existsResult.error);
       }
 
-      const fullPath = path.join(logFilePath, logFile);
-
-      if (!fs.existsSync(fullPath)) {
+      if (!existsResult.value) {
         return success([]);
       }
 
-      // Read and parse the log file
-      const content = await fs.promises.readFile(fullPath, "utf8");
+      // Read file content
+      const readResult = await this.fileSystemService.readFile(
+        trackingFilePath
+      );
+      if (readResult.isFailure()) {
+        return failure(readResult.error);
+      }
+
+      const content = readResult.value;
       const commitBlocks = content
         .split("\n\n")
         .filter((block) => block.trim());
