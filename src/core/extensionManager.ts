@@ -19,6 +19,7 @@ import { IWorkspaceProvider } from "../services/interfaces/IWorkspaceProvider";
 import { IFileSystemService } from "../services/interfaces/IFileSystemService";
 import { ConfigurationService } from "../services/configurationService";
 import { IConfigurationService } from "../services/interfaces/IConfigurationService";
+import { FileSystemService } from "../services/fileSystemService";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -186,16 +187,10 @@ export class ExtensionManager {
     };
 
     // Create file system service
-    const fileSystemService: IFileSystemService = {
-      writeFile: (path, content, options) => {
-        const fs = require("fs");
-        fs.writeFileSync(path, content, options);
-      },
-      exists: (path) => {
-        const fs = require("fs");
-        return fs.existsSync(path);
-      },
-    };
+    const fileSystemService = new FileSystemService({
+      logService: this.logService,
+      cacheEnabled: true, // Enable caching for better performance
+    });
 
     // Initialize with all dependencies
     this.gitService = new GitService({
@@ -230,7 +225,9 @@ export class ExtensionManager {
       this.context,
       this.logService,
       this.configurationService,
-      this.gitService
+      this.gitService,
+      undefined,
+      fileSystemService
     );
 
     this.repositoryManager = new RepositoryManager(
@@ -240,7 +237,8 @@ export class ExtensionManager {
       this.errorHandlingService,
       this.gitService,
       this.configurationService,
-      this.logService
+      this.logService,
+      fileSystemService
     );
 
     // Connect GitService to RepositoryManager
@@ -256,7 +254,8 @@ export class ExtensionManager {
       this.logService,
       this.setupManager,
       this.statusManager,
-      this.repositoryManager
+      this.repositoryManager,
+      fileSystemService
     );
 
     // Connect components via events
@@ -292,7 +291,6 @@ export class ExtensionManager {
     // Step 4: Set up event listeners
     this.registerEventListeners();
 
-    // Register for configuration changes
     this.disposables.push(
       this.configurationService.onDidChangeConfigurationValue<boolean>(
         "enabled",
@@ -309,10 +307,7 @@ export class ExtensionManager {
             }
           }
         }
-      )
-    );
-
-    this.disposables.push(
+      ),
       this.configurationService.onDidChangeConfigurationValue<number>(
         "updateFrequencyMinutes",
         (newValue) => {
@@ -323,26 +318,15 @@ export class ExtensionManager {
             this.statusManager.startStatusUpdateInterval();
           }
         }
-      )
-    );
-
-    // Listen for log file path changes
-    this.disposables.push(
+      ),
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFilePath",
         () => this.handleLogConfigChange()
-      )
-    );
-
-    this.disposables.push(
+      ),
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFile",
         () => this.handleLogConfigChange()
-      )
-    );
-
-    // Handle excluded branches changes
-    this.disposables.push(
+      ),
       this.configurationService.onDidChangeConfigurationValue<string[]>(
         "excludedBranches",
         (newValue) => {
@@ -357,7 +341,8 @@ export class ExtensionManager {
             );
           }
         }
-      )
+      ),
+      fileSystemService
     );
   }
 
