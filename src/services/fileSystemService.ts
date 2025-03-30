@@ -418,21 +418,30 @@ export class FileSystemService implements IFileSystemService {
    */
   public async createExecutableScript(
     content: string,
-    options?: { prefix?: string; suffix?: string }
+    options?: {
+      prefix?: string;
+      suffix?: string;
+      directory?: string;
+      mode?: number;
+    }
   ): Promise<Result<string, Error>> {
     try {
-      const scriptResult = await this.createTempFile(content, {
-        prefix: options?.prefix || "commit-tracker-script-",
-        suffix: options?.suffix || ".sh",
-        mode: 0o755, // rwx for owner, rx for group and others
-      });
+      const os = require("os");
+      const prefix = options?.prefix || "commit-tracker-script-";
+      const suffix = options?.suffix || ".sh";
+      const mode = options?.mode || 0o755; // rwx for owner, rx for group and others
+      const tmpdir = options?.directory || os.tmpdir();
 
-      if (scriptResult.isFailure()) {
-        return failure(scriptResult.error);
-      }
+      // Create a unique filename
+      const fileName = `${prefix}${Date.now()}-${Math.round(
+        Math.random() * 10000
+      )}${suffix}`;
+      const scriptPath = path.join(tmpdir, fileName);
 
-      const scriptPath = scriptResult.value;
-      this.logService?.debug(`Created executable script: ${scriptPath}`);
+      this.logService?.debug(`Creating executable script: ${scriptPath}`);
+
+      // Write the content
+      await fs.promises.writeFile(scriptPath, content, { mode });
 
       return success(scriptPath);
     } catch (error) {
@@ -480,9 +489,7 @@ export class FileSystemService implements IFileSystemService {
    * @param filePath Path to the file
    * @returns Result containing file stats
    */
-  public async getFileStats(
-    filePath: string
-  ): Promise<
+  public async getFileStats(filePath: string): Promise<
     Result<
       {
         size: number;
