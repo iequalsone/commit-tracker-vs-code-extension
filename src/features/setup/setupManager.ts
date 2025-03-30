@@ -271,7 +271,6 @@ export class SetupManager {
       const logFile = path.join(folderPath, "commit-tracker.log");
 
       const fileExistsResult = await this.fileSystemService.exists(logFile);
-
       if (fileExistsResult.isFailure()) {
         this.logService.error(
           `Error checking if log file exists: ${fileExistsResult.error}`
@@ -287,7 +286,7 @@ export class SetupManager {
 
         if (writeResult.isFailure()) {
           this.logService.error(
-            `Failed to create log file: ${writeResult.error}`
+            `Error creating log file: ${writeResult.error}`
           );
           return false;
         }
@@ -295,7 +294,7 @@ export class SetupManager {
         this.logService.info(`Created log file at ${logFile}`);
       }
 
-      // Update configuration - use ConfigurationService if available
+      // Update configuration
       if (this.configurationService) {
         const result = await this.configurationService.setTrackerRepo(
           folderPath,
@@ -304,7 +303,7 @@ export class SetupManager {
 
         if (result.isFailure()) {
           this.logService.error(
-            `Failed to set tracker repository: ${result.error}`
+            `Error updating configuration: ${result.error}`
           );
           return false;
         }
@@ -316,29 +315,6 @@ export class SetupManager {
           folderPath,
           vscode.ConfigurationTarget.Global
         );
-        await config.update(
-          "logFile",
-          "commit-tracker.log",
-          vscode.ConfigurationTarget.Global
-        );
-      }
-
-      // If we have a repository manager, notify it of configuration changes
-      if (this.repositoryManager) {
-        const excludedBranches = this.configurationService
-          ? this.configurationService.getExcludedBranches()
-          : vscode.workspace
-              .getConfiguration("commitTracker")
-              .get<string[]>("excludedBranches") || [];
-
-        this.repositoryManager.updateConfiguration(
-          folderPath,
-          "commit-tracker.log",
-          excludedBranches
-        );
-
-        // Reinitialize the repository manager
-        await this.repositoryManager.initialize();
       }
 
       return true;
