@@ -13,6 +13,9 @@ export enum ErrorType {
   REPOSITORY = "repository",
   NETWORK = "network",
   UNKNOWN = "unknown",
+  EXTENSION_NOT_FOUND = "extension-not-found",
+  API_INITIALIZATION_FAILED = "api-initialization-failed",
+  INITIALIZATION_FAILED = "initialization-failed",
 }
 
 /**
