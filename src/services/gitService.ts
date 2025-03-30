@@ -18,35 +18,6 @@ interface GitCache {
 }
 
 /**
- * Default implementation of IFileSystemService using Node.js fs module
- */
-class DefaultFileSystemService implements IFileSystemService {
-  private fs = require("fs");
-
-  async writeFile(
-    path: string,
-    content: string,
-    options?: { append?: boolean; mode?: number; atomic?: boolean }
-  ): Promise<Result<void, Error>> {
-    try {
-      this.fs.writeFileSync(path, content, options);
-      return success(undefined);
-    } catch (error) {
-      return failure(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  async exists(path: string): Promise<Result<boolean, Error>> {
-    try {
-      const exists = this.fs.existsSync(path);
-      return success(exists);
-    } catch (error) {
-      return failure(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-}
-
-/**
  * Service that handles all Git operations
  */
 export class GitService {
@@ -67,17 +38,16 @@ export class GitService {
    * Create a new GitService instance with all dependencies injectable
    * @param options Optional dependencies for the service
    */
-  constructor(options?: {
+  constructor(options: {
     logService?: ILogService;
     terminalProvider?: ITerminalProvider;
     workspaceProvider?: IWorkspaceProvider;
-    fileSystemService?: IFileSystemService;
+    fileSystemService: IFileSystemService;
   }) {
     this.logService = options?.logService;
     this.terminalProvider = options?.terminalProvider;
     this.workspaceProvider = options?.workspaceProvider;
-    this.fileSystemService =
-      options?.fileSystemService || new DefaultFileSystemService();
+    this.fileSystemService = options.fileSystemService;
   }
 
   /**
