@@ -140,17 +140,38 @@ export class ExtensionManager {
     try {
       this.logService.info("Commit Tracker extension activating...");
 
-      // Initialize components in the correct order
-      await this.initializeExtension();
+      // Show the output channel if debug logging is enabled
+      if (this.configurationService.get<boolean>("enableDebugLogging", false)) {
+        this.logService.showOutput(true);
+      }
 
+      // Create default NotificationService
+      if (!this.notificationService) {
+        this.logService.info("Creating default NotificationService");
+        this.notificationService = new NotificationService(
+          this.logService,
+          this.configurationService
+        );
+        this.disposableManager.register(this.notificationService);
+      }
+
+      await this.initializeExtension();
       this.logService.info("Commit Tracker extension activated successfully");
+
+      // Show welcome message on first activation
+      const firstRun = this.context.globalState.get<boolean>("firstRun", true);
+      if (firstRun) {
+        this.notificationService.info(
+          "Commit Tracker extension is now active",
+          "Get started by setting up your tracking repository",
+          [{ title: "Run Setup", action: "commitTracker.setupTracker" }]
+        );
+        await this.context.globalState.update("firstRun", false);
+      }
     } catch (error) {
-      this.logService.error(
-        "Failed to activate Commit Tracker extension",
-        error
-      );
+      this.logService.error("Failed to activate extension", error);
       vscode.window.showErrorMessage(
-        "Failed to activate Commit Tracker extension"
+        `Failed to activate Commit Tracker: ${error}`
       );
     }
   }
@@ -239,10 +260,14 @@ export class ExtensionManager {
     this.fileSystemService = fileSystemService;
 
     // Initialize NotificationService
-    this.notificationService = new NotificationService(
-      this.logService,
-      this.configurationService
-    );
+    if (!this.notificationService) {
+      this.logService.info("Initializing default NotificationService");
+      this.notificationService = new NotificationService(
+        this.logService,
+        this.configurationService
+      );
+      this.disposableManager.register(this.notificationService);
+    }
 
     this.gitService = new GitService({
       logService: this.logService,
