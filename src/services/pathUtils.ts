@@ -1,5 +1,7 @@
 import * as path from "path";
 import * as os from "os";
+import * as fs from "fs/promises";
+import { constants } from "fs";
 import { IPathUtils } from "./interfaces/IPathUtils";
 import { ILogService } from "./interfaces/ILogService";
 
@@ -252,5 +254,98 @@ export class PathUtils implements IPathUtils {
     }
 
     return pathToConvert;
+  }
+
+  /**
+   * Checks if a file has specific permissions
+   * @param filePath Path to the file
+   * @param mode Expected permission mode (octal number)
+   * @returns Promise resolving to true if file has expected permissions
+   */
+  public async hasPermissions(
+    filePath: string,
+    mode: number
+  ): Promise<boolean> {
+    try {
+      const stats = await fs.stat(filePath);
+      // Compare the permission bits (last 12 bits of mode)
+      const fileMode = stats.mode & 0o7777;
+      const result = (fileMode & mode) === mode;
+
+      this.logService?.debug(
+        `Permission check for '${filePath}': expected ${mode.toString(
+          8
+        )}, actual ${fileMode.toString(8)}, result: ${result}`
+      );
+      return result;
+    } catch (error) {
+      this.logService?.error(
+        `Error checking permissions for '${filePath}': ${error}`
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Sets permissions on a file
+   * @param filePath Path to the file
+   * @param mode Permission mode to set (octal number)
+   * @returns Promise resolving when permissions are set
+   */
+  public async setPermissions(filePath: string, mode: number): Promise<void> {
+    try {
+      await fs.chmod(filePath, mode);
+      this.logService?.debug(
+        `Successfully set permissions for '${filePath}' to ${mode.toString(8)}`
+      );
+    } catch (error) {
+      this.logService?.error(
+        `Failed to set permissions for '${filePath}': ${error}`
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Makes a file executable
+   * @param filePath Path to the file
+   * @returns Promise resolving when file is made executable
+   */
+  public async makeExecutable(filePath: string): Promise<void> {
+    try {
+      const stats = await fs.stat(filePath);
+      const newMode = stats.mode | 0o111; // Add executable bit for user, group, others
+      await this.setPermissions(filePath, newMode);
+      this.logService?.debug(`Made '${filePath}' executable`);
+    } catch (error) {
+      this.logService?.error(
+        `Failed to make '${filePath}' executable: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Checks if a file is executable
+   * @param filePath Path to the file
+   * @returns Promise resolving to true if file is executable
+   */
+  public async isExecutable(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath, constants.X_OK);
+      this.logService?.debug(`'${filePath}' is executable`);
+      return true;
+    } catch {
+      this.logService?.debug(`'${filePath}' is not executable`);
+      return false;
+    }
+  }
+
+  /**
+   * Gets platform-appropriate executable file extension
+   * @returns The executable extension for the current platform
+   */
+  public getExecutableExtension(): string {
+    return os.platform() === "win32" ? ".cmd" : "";
   }
 }
