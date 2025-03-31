@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as glob from "glob";
 import { Result, success, failure } from "../utils/results";
+import { debounce } from "../utils/debounce";
 import { ILogService } from "./interfaces/ILogService";
 import {
   IFileSystemService,
@@ -8,8 +10,11 @@ import {
   FileWatcherEvent,
   FileWatcherOptions,
 } from "./interfaces/IFileSystemService";
-import * as glob from "glob";
-import { debounce } from "../utils/debounce";
+import { TempFileManager } from "./tempFileManager";
+import {
+  TempFileHandle,
+  TempDirectoryHandle,
+} from "./interfaces/ITempFileHandles";
 
 /**
  * Implementation of FileWatcher interface
@@ -74,6 +79,7 @@ export class FileSystemService implements IFileSystemService {
     { content: string; timestamp: number }
   >;
   private activeWatchers: Map<string, FileWatcherImpl> = new Map();
+  private tempFileManager: TempFileManager;
 
   /**
    * Creates a new FileSystemService
@@ -93,6 +99,8 @@ export class FileSystemService implements IFileSystemService {
       cacheEnabled: this.cacheEnabled,
       cacheExpiryMs: this.cacheExpiryMs,
     });
+
+    this.tempFileManager = new TempFileManager(options?.logService);
   }
 
   /**
@@ -1095,21 +1103,223 @@ export class FileSystemService implements IFileSystemService {
   }
 
   /**
+   * Creates a temporary file with automatic cleanup
+   * @param content File content
+   * @param options Options for creating the temp file
+   * @returns Result containing the temp file handle with path and cleanup method
+   */
+  public async createTempFileWithCleanup(
+    content: string,
+    options?: {
+      prefix?: string;
+      suffix?: string;
+      mode?: number;
+      deleteOnExit?: boolean;
+    }
+  ): Promise<Result<TempFileHandle, Error>> {
+    try {
+      const tempFilePath = this.tempFileManager.generateTempFilePath({
+        prefix: options?.prefix,
+        suffix: options?.suffix,
+      });
+
+      // Write the file
+      const writeResult = await this.writeFile(tempFilePath, content, {
+        mode: options?.mode,
+        atomic: true, // Use atomic write for safety
+      });
+
+      if (writeResult.isFailure()) {
+        return failure(writeResult.error);
+      }
+
+      // Track for auto-cleanup if requested (default to true)
+      const deleteOnExit = options?.deleteOnExit !== false;
+      if (deleteOnExit) {
+        this.tempFileManager.trackFile(tempFilePath);
+      }
+
+      // Create handle with the file path and cleanup function
+      const handle: TempFileHandle = {
+        path: tempFilePath,
+        content,
+        cleanup: async () => {
+          this.logService?.debug(`Cleaning up temp file: ${tempFilePath}`);
+          this.tempFileManager.untrackFile(tempFilePath);
+          const deleteResult = await this.deleteFile(tempFilePath);
+          if (deleteResult.isFailure()) {
+            this.logService?.error(
+              `Failed to clean up temp file: ${tempFilePath}`,
+              deleteResult.error
+            );
+          }
+        },
+        refresh: async (newContent: string) => {
+          const refreshResult = await this.writeFile(tempFilePath, newContent, {
+            mode: options?.mode,
+            atomic: true,
+          });
+
+          if (refreshResult.isFailure()) {
+            throw refreshResult.error;
+          }
+        },
+      };
+
+      this.logService?.debug(
+        `Created temporary file with auto-cleanup: ${tempFilePath}`
+      );
+      return success(handle);
+    } catch (error) {
+      this.logService?.error(
+        `Error creating temporary file with cleanup`,
+        error
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Creates a temporary directory with automatic cleanup
+   * @param options Options for creating the temp directory
+   * @returns Result containing the temp directory handle with path and cleanup method
+   */
+  public async createTempDirectoryWithCleanup(options?: {
+    prefix?: string;
+    deleteOnExit?: boolean;
+  }): Promise<Result<TempDirectoryHandle, Error>> {
+    try {
+      const tempDirPath = this.tempFileManager.generateTempDirectoryPath({
+        prefix: options?.prefix,
+      });
+
+      // Create the directory
+      const createDirResult = await this.ensureDirectory(tempDirPath);
+      if (createDirResult.isFailure()) {
+        return failure(createDirResult.error);
+      }
+
+      // Track for auto-cleanup if requested (default to true)
+      const deleteOnExit = options?.deleteOnExit !== false;
+      if (deleteOnExit) {
+        this.tempFileManager.trackDirectory(tempDirPath);
+      }
+
+      // Create handle with the directory path and cleanup function
+      const handle: TempDirectoryHandle = {
+        path: tempDirPath,
+        cleanup: async () => {
+          this.logService?.debug(`Cleaning up temp directory: ${tempDirPath}`);
+          this.tempFileManager.untrackDirectory(tempDirPath);
+          const deleteResult = await this.deleteDirectory(tempDirPath, {
+            recursive: true,
+            force: true,
+          });
+          if (deleteResult.isFailure()) {
+            this.logService?.error(
+              `Failed to clean up temp directory: ${tempDirPath}`,
+              deleteResult.error
+            );
+          }
+        },
+        createFile: async (
+          fileName: string,
+          content: string
+        ): Promise<string> => {
+          const filePath = path.join(tempDirPath, fileName);
+          const writeResult = await this.writeFile(filePath, content, {
+            atomic: true,
+          });
+          if (writeResult.isFailure()) {
+            throw writeResult.error;
+          }
+          return filePath;
+        },
+        listFiles: async (): Promise<string[]> => {
+          const listResult = await this.listFiles(tempDirPath);
+          if (listResult.isFailure()) {
+            throw listResult.error;
+          }
+          return listResult.value;
+        },
+      };
+
+      this.logService?.debug(
+        `Created temporary directory with auto-cleanup: ${tempDirPath}`
+      );
+      return success(handle);
+    } catch (error) {
+      this.logService?.error(
+        `Error creating temporary directory with cleanup`,
+        error
+      );
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Create a temporary operation script with automatic cleanup
+   * @param content Script content
+   * @param options Options for creating the script
+   * @returns Result containing the script handle
+   */
+  public async createTempScriptWithCleanup(
+    content: string,
+    options?: {
+      prefix?: string;
+      suffix?: string;
+      mode?: number;
+      deleteOnExit?: boolean;
+    }
+  ): Promise<Result<TempFileHandle, Error>> {
+    // Default to .sh extension on Unix/Mac, .cmd on Windows
+    const isWindows = process.platform === "win32";
+    const defaultSuffix = isWindows ? ".cmd" : ".sh";
+    const suffix = options?.suffix || defaultSuffix;
+
+    // Default executable mode for scripts (rwxr-xr-x)
+    const defaultMode = 0o755;
+    const mode = options?.mode || defaultMode;
+
+    // Create with executable permissions
+    return this.createTempFileWithCleanup(content, {
+      prefix: options?.prefix || "commit-tracker-script-",
+      suffix,
+      mode,
+      deleteOnExit: options?.deleteOnExit,
+    });
+  }
+
+  /**
+   * Clean up all tracked temporary files and directories
+   */
+  public async cleanupAllTempFiles(): Promise<Result<void, Error>> {
+    try {
+      await this.tempFileManager.cleanupAll();
+      return success(undefined);
+    } catch (error) {
+      this.logService?.error("Failed to clean up temporary files", error);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
    * Clean up resources used by the service
    */
   public dispose(): void {
-    // Close all active watchers
+    // Cleanup all file watchers
     for (const [path, watcher] of this.activeWatchers.entries()) {
-      try {
-        this.logService?.debug(`Disposing watcher for: ${path}`);
-        watcher.dispose();
-      } catch (error) {
-        this.logService?.error(`Error disposing watcher for ${path}: ${error}`);
-      }
+      this.logService?.debug(`Disposing file watcher for: ${path}`);
+      watcher.dispose();
     }
-
     this.activeWatchers.clear();
-    this.clearCache();
-    this.logService?.debug("FileSystemService disposed");
+
+    // Clean up all temporary files
+    this.tempFileManager.cleanupAll().catch((error) => {
+      this.logService?.error(
+        "Error cleaning up temporary files during disposal",
+        error
+      );
+    });
   }
 }
