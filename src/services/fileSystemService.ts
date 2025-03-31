@@ -488,10 +488,10 @@ export class FileSystemService implements IFileSystemService {
   }
 
   /**
-   * Create an executable script file with the given content
+   * Creates a temporary script with executable permissions
    * @param content Script content
-   * @param options Options for creating the script file
-   * @returns Result containing the path to the script file
+   * @param options Options for creating the temp script
+   * @returns Result containing the script path or an error
    */
   public async createExecutableScript(
     content: string,
@@ -503,27 +503,28 @@ export class FileSystemService implements IFileSystemService {
     }
   ): Promise<Result<string, Error>> {
     try {
-      const os = require("os");
-      const prefix = options?.prefix || "commit-tracker-script-";
-      const suffix = options?.suffix || ".sh";
-      const mode = options?.mode || 0o755; // rwx for owner, rx for group and others
-      const tmpdir = options?.directory || os.tmpdir();
+      const tempResult = await this.createTempFile(content, {
+        prefix: options?.prefix || "script-",
+        suffix: options?.suffix || this.pathUtils.getExecutableExtension(),
+        mode: 0o644, // Start with read/write permissions
+      });
 
-      // Create a unique filename
-      const fileName = `${prefix}${Date.now()}-${Math.round(
-        Math.random() * 10000
-      )}${suffix}`;
-      const scriptPath = this.joinPaths(tmpdir, fileName);
+      if (tempResult.isFailure()) {
+        return failure(tempResult.error);
+      }
 
-      this.logService?.debug(`Creating executable script: ${scriptPath}`);
+      const scriptPath = tempResult.value;
 
-      // Write the content
-      await fs.promises.writeFile(scriptPath, content, { mode });
-
-      return success(scriptPath);
+      // Now make the script executable
+      try {
+        await this.pathUtils.makeExecutable(scriptPath);
+        this.logService?.debug(`Created executable script at ${scriptPath}`);
+        return success(scriptPath);
+      } catch (error) {
+        return failure(new Error(`Failed to make script executable: ${error}`));
+      }
     } catch (error) {
-      this.logService?.error("Error creating executable script", error);
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      return failure(new Error(`Failed to create executable script: ${error}`));
     }
   }
 
@@ -936,6 +937,7 @@ export class FileSystemService implements IFileSystemService {
         recursive: options?.recursive ?? false,
         extensions: options?.extensions ?? [],
         exclude: options?.exclude ?? [],
+        excludePatterns: options?.excludePatterns ?? [],
         throttleMs: options?.throttleMs ?? 100,
       };
 
