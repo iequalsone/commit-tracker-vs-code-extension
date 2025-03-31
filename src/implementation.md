@@ -144,8 +144,8 @@ Step 7: Add Enhanced Functionality
 [x] Add safe temporary file handling
 [x] Create path normalization utilities
 [x] Verify fileSystemService is using pathUtils properly
-[] Update all methods in FileSystemService to use the pathUtils consistently
-[] Update the watchPath, listDirectory, copyFile, and other methods to use pathUtils
+[x] Update all methods in FileSystemService to use the pathUtils consistently
+[x] Update the watchPath, listDirectory, copyFile, and other methods to use pathUtils
 [] Add recursive directory operations
 [] Implement file permission management
 
