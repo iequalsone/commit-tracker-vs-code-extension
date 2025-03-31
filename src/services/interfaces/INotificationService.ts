@@ -1,223 +1,170 @@
 import * as vscode from "vscode";
 
 /**
- * Notification action to be shown with notification
+ * Notification severity levels
  */
-export interface NotificationAction {
-  /** Text to display on the action button */
-  title: string;
-
-  /** Function to call when action is clicked */
-  callback: () => Promise<void> | void;
-
-  /** Whether this is the primary action (displayed prominently) */
-  isPrimary?: boolean;
-}
+export type NotificationLevel = "info" | "warning" | "error";
 
 /**
- * Notification options to control notification behavior
+ * Options for customizing notifications
  */
 export interface NotificationOptions {
-  /** Actions to display with the notification */
-  actions?: NotificationAction[];
+  /** Actions to show with the notification */
+  actions?: string[];
 
-  /** Duration in milliseconds to show notification (undefined for persistent) */
-  duration?: number;
-
-  /** If true, notification requires explicit dismissal */
+  /** Whether to show the notification as a modal dialog */
   modal?: boolean;
 
-  /** Unique ID for tracking/grouping similar notifications */
-  id?: string;
+  /** Timeout in ms before the notification is automatically dismissed (0 for no timeout) */
+  timeout?: number;
 
-  /** Group ID for notification throttling/grouping */
-  groupId?: string;
+  /** Whether to throttle identical notifications */
+  throttle?: boolean;
 
-  /** Importance of notification (higher appears more prominently) */
-  priority?: "low" | "normal" | "high";
+  /** Custom key to use for throttling instead of the message text */
+  throttleKey?: string;
 
-  /** Whether to show the notification again if a similar one was recently shown */
-  suppressIfDuplicate?: boolean;
+  /** Period in ms during which identical notifications are throttled */
+  throttlePeriod?: number;
+
+  /** Whether to enable notification grouping */
+  grouping?: boolean;
+
+  /** Custom key to use for grouping instead of the notification level */
+  groupKey?: string | false;
+
+  /** Delay in ms before showing grouped notifications */
+  groupDelay?: number;
+
+  /** Whether notification can be canceled (for progress notifications) */
+  cancellable?: boolean;
+
+  /** Location for progress notifications */
+  progressLocation?: vscode.ProgressLocation;
 }
 
 /**
- * History entry for notifications
+ * Record of a shown notification for history tracking
  */
-export interface NotificationHistoryEntry {
-  /** Type of notification (info, warning, error) */
-  type: "info" | "warning" | "error" | "progress";
-
-  /** Message displayed in the notification */
+export interface NotificationRecord {
+  /** The notification message */
   message: string;
+
+  /** Severity level of the notification */
+  level: NotificationLevel;
 
   /** When the notification was shown */
   timestamp: Date;
 
-  /** Unique ID if provided */
-  id?: string;
+  /** Whether this was a throttled notification */
+  isThrottled?: boolean;
 
-  /** Group ID if provided */
-  groupId?: string;
+  /** Whether this was a grouped notification */
+  isGrouped?: boolean;
 
-  /** Whether user dismissed the notification */
-  dismissed?: boolean;
+  /** Number of throttled or grouped notifications */
+  count?: number;
 
-  /** Whether any actions were taken */
-  actionTaken?: boolean;
+  /** Size of the notification group */
+  groupSize?: number;
 
-  /** Which action was taken (if any) */
-  actionTitle?: string;
+  /** Whether this was a progress notification */
+  isProgress?: boolean;
+
+  /** Whether this was an input request */
+  isInput?: boolean;
+
+  /** Additional options used for the notification */
+  options?: NotificationOptions;
 }
 
 /**
- * Interface for notification service
- * Provides abstraction over VS Code's notification system with added features
+ * Interface for notification service that manages displaying notifications
+ * with advanced features like throttling, grouping, and history tracking
  */
 export interface INotificationService extends vscode.Disposable {
   /**
-   * Shows an information message to the user
-   * @param message Message to show
-   * @param options Notification options
-   * @returns Promise that resolves when notification is shown
+   * Shows an information notification
+   * @param message The notification message
+   * @param options Additional notification options
+   * @returns Promise that resolves to the selected item or undefined
    */
-  info(message: string, options?: NotificationOptions): Promise<void>;
+  info(
+    message: string,
+    options?: NotificationOptions
+  ): Promise<string | undefined>;
 
   /**
-   * Shows a warning message to the user
-   * @param message Warning message to show
-   * @param options Notification options
-   * @returns Promise that resolves when notification is shown
+   * Shows a warning notification
+   * @param message The notification message
+   * @param options Additional notification options
+   * @returns Promise that resolves to the selected item or undefined
    */
-  warn(message: string, options?: NotificationOptions): Promise<void>;
+  warning(
+    message: string,
+    options?: NotificationOptions
+  ): Promise<string | undefined>;
 
   /**
-   * Shows an error message to the user
-   * @param message Error message to show
-   * @param options Notification options
-   * @returns Promise that resolves when notification is shown
+   * Shows an error notification
+   * @param message The notification message
+   * @param options Additional notification options
+   * @returns Promise that resolves to the selected item or undefined
    */
-  error(message: string, options?: NotificationOptions): Promise<void>;
+  error(
+    message: string,
+    options?: NotificationOptions
+  ): Promise<string | undefined>;
 
   /**
-   * Shows a notification with progress
-   * @param title Title for the progress notification
-   * @param task Function that performs work and reports progress
-   * @returns Promise that resolves with the result of the task
+   * Shows a notification with a progress indicator for long-running operations
+   * @param title Title for the progress operation
+   * @param task Function that performs the long-running task
+   * @param options Additional notification options
+   * @returns Promise that resolves when the task completes
    */
   withProgress<T>(
     title: string,
     task: (
       progress: vscode.Progress<{ message?: string; increment?: number }>
-    ) => Promise<T>
+    ) => Thenable<T>,
+    options?: NotificationOptions
   ): Promise<T>;
 
   /**
-   * Shows a message requesting user confirmation
-   * @param message Message to show
-   * @param confirmText Text for confirm button
-   * @param cancelText Optional text for cancel button
-   * @returns Promise resolving to true if confirmed, false otherwise
+   * Shows a notification that requires user input
+   * @param message The message to show
+   * @param options Additional options for the input
+   * @returns Promise that resolves to the user input or undefined if canceled
    */
-  confirm(
+  showInputRequest(
     message: string,
-    confirmText: string,
-    cancelText?: string
-  ): Promise<boolean>;
+    options?: {
+      placeHolder?: string;
+      prompt?: string;
+      value?: string;
+      password?: boolean;
+      validateInput?: (
+        value: string
+      ) => string | undefined | null | Thenable<string | undefined | null>;
+    }
+  ): Promise<string | undefined>;
 
   /**
-   * Shows a message with multiple options for user selection
-   * @param message Message to show
-   * @param items Options for user to select
-   * @param options Additional notification options
-   * @returns Promise resolving to selected item or undefined if dismissed
+   * Gets the notification history
+   * @param limit Optional limit on the number of history items to return
+   * @returns Array of notification history records
    */
-  showOptions<T extends string>(
-    message: string,
-    items: T[],
-    options?: NotificationOptions
-  ): Promise<T | undefined>;
+  getHistory(limit?: number): NotificationRecord[];
 
   /**
-   * Shows a notification that remains until explicitly dismissed
-   * @param message Message to show
-   * @param type Type of notification
-   * @param options Additional notification options
-   * @returns Function to dismiss the notification
-   */
-  showPersistent(
-    message: string,
-    type: "info" | "warning" | "error",
-    options?: NotificationOptions
-  ): () => void;
-
-  /**
-   * Gets notification history
-   * @param limit Maximum number of entries to retrieve
-   * @returns Array of notification history entries
-   */
-  getHistory(limit?: number): NotificationHistoryEntry[];
-
-  /**
-   * Clears notification history
+   * Clears the notification history
    */
   clearHistory(): void;
 
   /**
-   * Sets the throttle interval for notifications
-   * @param groupId Group ID to throttle
-   * @param intervalMs Throttle interval in milliseconds
+   * Sets the maximum number of notifications to keep in history
+   * @param size The new maximum history size
    */
-  setThrottleInterval(groupId: string, intervalMs: number): void;
-
-  /**
-   * Enables or disables all notifications
-   * @param enabled Whether notifications should be enabled
-   */
-  setEnabled(enabled: boolean): void;
-
-  /**
-   * Gets whether notifications are currently enabled
-   * @returns True if notifications are enabled
-   */
-  isEnabled(): boolean;
-
-  /**
-   * Sets the default options for notifications
-   * @param options Default options to use
-   */
-  setDefaultOptions(options: Partial<NotificationOptions>): void;
-
-  /**
-   * Shows a notification with a text input field
-   * @param message Message to show
-   * @param placeholder Placeholder text for input
-   * @param defaultValue Default value for input
-   * @param options Additional notification options
-   * @returns Promise resolving to input value or undefined if dismissed
-   */
-  prompt(
-    message: string,
-    placeholder?: string,
-    defaultValue?: string,
-    options?: NotificationOptions
-  ): Promise<string | undefined>;
-
-  /**
-   * Creates a notification that can be updated
-   * @param initialMessage Initial message to display
-   * @param type Type of notification
-   * @returns Object with methods to update or dismiss the notification
-   */
-  createUpdatableNotification(
-    initialMessage: string,
-    type: "info" | "warning" | "error"
-  ): {
-    update(message: string): void;
-    dismiss(): void;
-  };
-
-  /**
-   * Dismisses all active notifications
-   */
-  dismissAll(): void;
+  setMaxHistorySize(size: number): void;
 }
