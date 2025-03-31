@@ -1,8 +1,66 @@
 import * as fs from "fs";
 import * as path from "path";
-import { IFileSystemService } from "./interfaces/IFileSystemService";
-import { ILogService } from "./interfaces/ILogService";
 import { Result, success, failure } from "../utils/results";
+import { ILogService } from "./interfaces/ILogService";
+import {
+  IFileSystemService,
+  FileWatcher,
+  FileWatcherEvent,
+  FileWatcherOptions,
+} from "./interfaces/IFileSystemService";
+import * as glob from "glob";
+import { debounce } from "../utils/debounce";
+
+/**
+ * Implementation of FileWatcher interface
+ */
+class FileWatcherImpl implements FileWatcher {
+  readonly path: string;
+  private fsWatcher: fs.FSWatcher | null;
+  private watchers: fs.FSWatcher[] = [];
+  private logService?: ILogService;
+
+  constructor(path: string, fsWatcher: fs.FSWatcher, logService?: ILogService) {
+    this.path = path;
+    this.fsWatcher = fsWatcher;
+    this.logService = logService;
+
+    if (fsWatcher) {
+      this.watchers.push(fsWatcher);
+    }
+  }
+
+  /**
+   * Adds another watcher to this FileWatcher
+   * @param watcher Additional FSWatcher to manage
+   */
+  addWatcher(watcher: fs.FSWatcher): void {
+    this.watchers.push(watcher);
+  }
+
+  /**
+   * Disposes of all watchers
+   */
+  dispose(): void {
+    this.logService?.debug(`Disposing file watcher for: ${this.path}`);
+
+    if (this.fsWatcher) {
+      this.fsWatcher.close();
+      this.fsWatcher = null;
+    }
+
+    // Clean up all additional watchers
+    for (const watcher of this.watchers) {
+      try {
+        watcher.close();
+      } catch (error) {
+        this.logService?.error(`Error closing watcher: ${error}`);
+      }
+    }
+
+    this.watchers = [];
+  }
+}
 
 /**
  * Default implementation of IFileSystemService using Node.js fs module
@@ -15,6 +73,7 @@ export class FileSystemService implements IFileSystemService {
     string,
     { content: string; timestamp: number }
   >;
+  private activeWatchers: Map<string, FileWatcherImpl> = new Map();
 
   /**
    * Creates a new FileSystemService
@@ -630,14 +689,6 @@ export class FileSystemService implements IFileSystemService {
   }
 
   /**
-   * Clean up resources used by the service
-   */
-  public dispose(): void {
-    this.clearCache();
-    this.logService?.debug("FileSystemService disposed");
-  }
-
-  /**
    * Check if a path exists (alias for pathExists)
    * @param pathToCheck Path to check
    * @returns Result indicating if path exists
@@ -785,5 +836,280 @@ export class FileSystemService implements IFileSystemService {
       );
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Watch a single file for changes
+   * @param filePath Path to the file to watch
+   * @param listener Function called when file changes
+   * @returns FileWatcher that can be disposed
+   */
+  public watchFile(
+    filePath: string,
+    listener: (event: FileWatcherEvent) => void
+  ): Result<FileWatcher, Error> {
+    try {
+      this.logService?.debug(`Setting up file watcher for: ${filePath}`);
+
+      // Security check
+      if (!this.validatePath(filePath)) {
+        return failure(new Error(`Invalid path: ${filePath}`));
+      }
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return failure(new Error(`File does not exist: ${filePath}`));
+      }
+
+      // Set up the file watcher
+      const watcher = fs.watch(filePath, (eventType) => {
+        // Map the raw event type to our enum
+        let event: FileWatcherEvent = "change";
+        if (eventType === "rename") {
+          // Check if the file still exists to determine if it was created or deleted
+          if (fs.existsSync(filePath)) {
+            event = "create";
+          } else {
+            event = "delete";
+          }
+        }
+
+        // Notify listener
+        listener(event);
+      });
+
+      const fileWatcher = new FileWatcherImpl(
+        filePath,
+        watcher,
+        this.logService
+      );
+      this.activeWatchers.set(filePath, fileWatcher);
+
+      return success(fileWatcher);
+    } catch (error) {
+      this.logService?.error(`Error setting up file watcher: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Watch a directory for changes
+   * @param dirPath Path to the directory
+   * @param listener Function called when files change
+   * @param options Additional watcher options
+   * @returns FileWatcher that can be disposed
+   */
+  public watchDirectory(
+    dirPath: string,
+    listener: (event: FileWatcherEvent, filePath: string) => void,
+    options?: FileWatcherOptions
+  ): Result<FileWatcher, Error> {
+    try {
+      this.logService?.debug(`Setting up directory watcher for: ${dirPath}`);
+
+      // Security check
+      if (!this.validatePath(dirPath)) {
+        return failure(new Error(`Invalid path: ${dirPath}`));
+      }
+
+      // Check if directory exists
+      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+        return failure(new Error(`Directory does not exist: ${dirPath}`));
+      }
+
+      // Set default options
+      const watchOptions: Required<FileWatcherOptions> = {
+        recursive: options?.recursive ?? false,
+        extensions: options?.extensions ?? [],
+        exclude: options?.exclude ?? [],
+        throttleMs: options?.throttleMs ?? 100,
+      };
+
+      // Create throttled listener if throttling is enabled
+      const processEvent =
+        watchOptions.throttleMs > 0
+          ? debounce((event: FileWatcherEvent, filename: string) => {
+              const fullPath = path.join(dirPath, filename);
+
+              // Check extension filter if specified
+              if (watchOptions.extensions.length > 0) {
+                const ext = path.extname(filename).toLowerCase();
+                if (!watchOptions.extensions.includes(ext)) {
+                  return;
+                }
+              }
+
+              // Check exclusion patterns
+              if (watchOptions.exclude.length > 0) {
+                for (const pattern of watchOptions.exclude) {
+                  if (glob.sync(pattern).includes(filename)) {
+                    return;
+                  }
+                }
+              }
+
+              listener(event, fullPath);
+            }, watchOptions.throttleMs)
+          : (event: FileWatcherEvent, filename: string) => {
+              const fullPath = path.join(dirPath, filename);
+              listener(event, fullPath);
+            };
+
+      // Set up the directory watcher
+      const watcher = fs.watch(
+        dirPath,
+        { recursive: watchOptions.recursive },
+        (eventType, filename) => {
+          if (!filename) {
+            return;
+          }
+
+          // Map the raw event type to our enum
+          let event: FileWatcherEvent = "change";
+          if (eventType === "rename") {
+            const fullPath = path.join(dirPath, filename);
+            if (fs.existsSync(fullPath)) {
+              event = "create";
+            } else {
+              event = "delete";
+            }
+          }
+
+          processEvent(event, filename);
+        }
+      );
+
+      const dirWatcher = new FileWatcherImpl(dirPath, watcher, this.logService);
+      this.activeWatchers.set(dirPath, dirWatcher);
+
+      return success(dirWatcher);
+    } catch (error) {
+      this.logService?.error(`Error setting up directory watcher: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Watch multiple paths (files or directories)
+   * @param paths Array of paths to watch
+   * @param listener Function called when any file changes
+   * @param options Additional watcher options
+   * @returns FileWatcher that can be disposed
+   */
+  public watchPaths(
+    paths: string[],
+    listener: (event: FileWatcherEvent, filePath: string) => void,
+    options?: FileWatcherOptions
+  ): Result<FileWatcher, Error> {
+    try {
+      if (paths.length === 0) {
+        return failure(new Error("No paths provided for watching"));
+      }
+
+      this.logService?.debug(`Setting up watchers for ${paths.length} paths`);
+
+      // Setup watcher for the first path
+      const firstPath = paths[0];
+      let mainWatcher: FileWatcherImpl | null = null;
+
+      const stats = fs.statSync(firstPath);
+      if (stats.isDirectory()) {
+        const result = this.watchDirectory(firstPath, listener, options);
+
+        if (result.isFailure()) {
+          return result;
+        }
+
+        mainWatcher = this.activeWatchers.get(firstPath) as FileWatcherImpl;
+      } else {
+        const result = this.watchFile(firstPath, (event) =>
+          listener(event, firstPath)
+        );
+
+        if (result.isFailure()) {
+          return result;
+        }
+
+        mainWatcher = this.activeWatchers.get(firstPath) as FileWatcherImpl;
+      }
+
+      // Add watchers for additional paths
+      for (let i = 1; i < paths.length; i++) {
+        const currentPath = paths[i];
+
+        try {
+          const stats = fs.statSync(currentPath);
+          let watcher: fs.FSWatcher;
+
+          if (stats.isDirectory()) {
+            watcher = fs.watch(
+              currentPath,
+              { recursive: options?.recursive ?? false },
+              (eventType, filename) => {
+                if (!filename) {
+                  return;
+                }
+
+                let event: FileWatcherEvent = "change";
+                if (eventType === "rename") {
+                  const fullPath = path.join(currentPath, filename);
+                  if (fs.existsSync(fullPath)) {
+                    event = "create";
+                  } else {
+                    event = "delete";
+                  }
+                }
+
+                listener(event, path.join(currentPath, filename));
+              }
+            );
+          } else {
+            watcher = fs.watch(currentPath, (eventType) => {
+              let event: FileWatcherEvent = "change";
+              if (eventType === "rename") {
+                if (fs.existsSync(currentPath)) {
+                  event = "create";
+                } else {
+                  event = "delete";
+                }
+              }
+
+              listener(event, currentPath);
+            });
+          }
+
+          mainWatcher.addWatcher(watcher);
+        } catch (error) {
+          this.logService?.error(
+            `Error watching path ${currentPath}: ${error}`
+          );
+          // Continue with other paths even if one fails
+        }
+      }
+
+      return success(mainWatcher);
+    } catch (error) {
+      this.logService?.error(`Error setting up path watchers: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Clean up resources used by the service
+   */
+  public dispose(): void {
+    // Close all active watchers
+    for (const [path, watcher] of this.activeWatchers.entries()) {
+      try {
+        this.logService?.debug(`Disposing watcher for: ${path}`);
+        watcher.dispose();
+      } catch (error) {
+        this.logService?.error(`Error disposing watcher for ${path}: ${error}`);
+      }
+    }
+
+    this.activeWatchers.clear();
+    this.clearCache();
+    this.logService?.debug("FileSystemService disposed");
   }
 }
