@@ -425,18 +425,29 @@ export class FileSystemService implements IFileSystemService {
     dirPath: string
   ): Promise<Result<string[], Error>> {
     try {
-      this.logService?.debug(`Listing directory: ${dirPath}`);
+      // Normalize the path using pathUtils
+      const normalizedPath = this.pathUtils.normalize(dirPath);
 
-      // Security check
-      if (!this.validatePath(dirPath)) {
-        return failure(new Error(`Invalid directory path: ${dirPath}`));
+      // Check if path is valid
+      if (!this.validatePath(normalizedPath)) {
+        return failure(new Error(`Invalid path: ${dirPath}`));
       }
 
-      const files = await fs.promises.readdir(dirPath);
+      const files = await fs.promises.readdir(normalizedPath);
+
+      // If we want absolute paths, use pathUtils.join
+      if (this.logService) {
+        this.logService.debug(
+          `Listed ${files.length} items in directory: ${normalizedPath}`
+        );
+      }
+
       return success(files);
     } catch (error) {
-      this.logService?.error(`Error listing directory: ${dirPath}`, error);
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      if (this.logService) {
+        this.logService.error(`Failed to list directory: ${error}`);
+      }
+      return failure(new Error(`Failed to list directory: ${error}`));
     }
   }
 
@@ -590,7 +601,7 @@ export class FileSystemService implements IFileSystemService {
   }
 
   /**
-   * Watch a file or directory for changes
+   * Watch a path for changes
    * @param pathToWatch Path to watch
    * @param listener Function to call when changes occur
    * @returns Result containing an object with a dispose method
@@ -600,52 +611,47 @@ export class FileSystemService implements IFileSystemService {
     listener: (event: "change" | "create" | "delete", filePath: string) => void
   ): Result<{ dispose: () => void }, Error> {
     try {
-      this.logService?.debug(`Setting up watcher for: ${pathToWatch}`);
+      // Normalize path using pathUtils
+      const normalizedPath = this.pathUtils.normalize(pathToWatch);
 
-      // Security check
-      if (!this.validatePath(pathToWatch)) {
+      // Check if path is valid
+      if (!this.validatePath(normalizedPath)) {
         return failure(new Error(`Invalid path: ${pathToWatch}`));
       }
 
-      // Set up file watcher
-      const watcher = fs.watch(pathToWatch, (eventType, filename) => {
-        this.logService?.debug(
-          `Watch event: ${eventType} on ${filename || "unknown"}`
-        );
+      const watcher = fs.watch(
+        normalizedPath,
+        { recursive: true },
+        (eventType, filename) => {
+          if (!filename) {
+            return;
+          }
 
-        // Invalidate cache if caching is enabled
-        if (this.cacheEnabled && filename) {
-          const fullPath = this.joinPaths(pathToWatch, filename);
-          this.fileCache.delete(fullPath);
+          // Normalize path of changed file
+          const changedFilePath = this.pathUtils.join(normalizedPath, filename);
+          const eventName = eventType === "rename" ? "delete" : "change";
+
+          listener(eventName, changedFilePath);
         }
+      );
 
-        // Map native fs events to our expected event types
-        let mappedEvent: "change" | "create" | "delete" = "change";
-        if (eventType === "rename") {
-          // fs.watch can't directly tell us if it's a create or delete,
-          // we're defaulting to "create" here but in a real implementation
-          // you might want to check if the file exists
-          mappedEvent = "create";
-        }
+      if (this.logService) {
+        this.logService.debug(`Watching path for changes: ${normalizedPath}`);
+      }
 
-        if (filename) {
-          listener(mappedEvent, this.joinPaths(pathToWatch, filename));
-        }
-      });
-
-      // Return an object with a dispose method
       return success({
         dispose: () => {
-          this.logService?.debug(`Stopping watcher for: ${pathToWatch}`);
           watcher.close();
+          if (this.logService) {
+            this.logService.debug(`Stopped watching path: ${normalizedPath}`);
+          }
         },
       });
     } catch (error) {
-      this.logService?.error(
-        `Error setting up watcher for: ${pathToWatch}`,
-        error
-      );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      if (this.logService) {
+        this.logService.error(`Failed to watch path: ${error}`);
+      }
+      return failure(new Error(`Failed to watch path: ${error}`));
     }
   }
 
@@ -655,7 +661,23 @@ export class FileSystemService implements IFileSystemService {
    * @returns True if path is valid and safe
    */
   public validatePath(pathToValidate: string): boolean {
-    return this.pathUtils.isPathSafe(pathToValidate);
+    // Normalize the path first using pathUtils
+    const normalizedPath = this.pathUtils.normalize(pathToValidate);
+
+    // Check for path traversal attempts (e.g., "../" sequences)
+    // This is a basic check, additional validation might be needed for your use case
+    if (normalizedPath.includes("..")) {
+      if (this.logService) {
+        this.logService.warn(
+          `Path validation failed - possible traversal attempt: ${pathToValidate}`
+        );
+      }
+      return false;
+    }
+
+    // More validation as needed...
+
+    return true;
   }
 
   /**
@@ -676,7 +698,7 @@ export class FileSystemService implements IFileSystemService {
    * @returns Normalized path
    */
   public normalizePath(...segments: string[]): string {
-    return this.pathUtils.normalize(this.joinPaths(...segments));
+    return this.pathUtils.normalize(this.pathUtils.join(...segments));
   }
 
   /**
@@ -739,42 +761,43 @@ export class FileSystemService implements IFileSystemService {
     destinationPath: string
   ): Promise<Result<void, Error>> {
     try {
-      this.logService?.debug(
-        `Copying file from: ${sourcePath} to: ${destinationPath}`
-      );
+      // Normalize both paths using pathUtils
+      const normalizedSource = this.pathUtils.normalize(sourcePath);
+      const normalizedDest = this.pathUtils.normalize(destinationPath);
 
-      // Security check
+      // Check if paths are valid
       if (
-        !this.validatePath(sourcePath) ||
-        !this.validatePath(destinationPath)
+        !this.validatePath(normalizedSource) ||
+        !this.validatePath(normalizedDest)
       ) {
         return failure(
-          new Error(`Invalid file path: ${sourcePath} or ${destinationPath}`)
+          new Error(
+            `Invalid path: ${
+              !this.validatePath(normalizedSource)
+                ? sourcePath
+                : destinationPath
+            }`
+          )
         );
       }
 
       // Ensure destination directory exists
-      const dirResult = await this.ensureDirectoryExists(
-        path.dirname(destinationPath)
-      );
-      if (dirResult.isFailure()) {
-        return failure(dirResult.error);
-      }
+      await this.ensureDirectoryExists(this.pathUtils.dirname(normalizedDest));
 
-      await fs.promises.copyFile(sourcePath, destinationPath);
+      await fs.promises.copyFile(normalizedSource, normalizedDest);
 
-      // Invalidate cache if caching is enabled
-      if (this.cacheEnabled) {
-        this.fileCache.delete(destinationPath);
+      if (this.logService) {
+        this.logService.debug(
+          `Copied file from ${normalizedSource} to ${normalizedDest}`
+        );
       }
 
       return success(undefined);
     } catch (error) {
-      this.logService?.error(
-        `Error copying file: ${sourcePath} to ${destinationPath}`,
-        error
-      );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      if (this.logService) {
+        this.logService.error(`Failed to copy file: ${error}`);
+      }
+      return failure(new Error(`Failed to copy file: ${error}`));
     }
   }
 
@@ -789,43 +812,43 @@ export class FileSystemService implements IFileSystemService {
     destinationPath: string
   ): Promise<Result<void, Error>> {
     try {
-      this.logService?.debug(
-        `Moving file from: ${sourcePath} to: ${destinationPath}`
-      );
+      // Normalize both paths using pathUtils
+      const normalizedSource = this.pathUtils.normalize(sourcePath);
+      const normalizedDest = this.pathUtils.normalize(destinationPath);
 
-      // Security check
+      // Check if paths are valid
       if (
-        !this.validatePath(sourcePath) ||
-        !this.validatePath(destinationPath)
+        !this.validatePath(normalizedSource) ||
+        !this.validatePath(normalizedDest)
       ) {
         return failure(
-          new Error(`Invalid file path: ${sourcePath} or ${destinationPath}`)
+          new Error(
+            `Invalid path: ${
+              !this.validatePath(normalizedSource)
+                ? sourcePath
+                : destinationPath
+            }`
+          )
         );
       }
 
       // Ensure destination directory exists
-      const dirResult = await this.ensureDirectoryExists(
-        path.dirname(destinationPath)
-      );
-      if (dirResult.isFailure()) {
-        return failure(dirResult.error);
-      }
+      await this.ensureDirectoryExists(this.pathUtils.dirname(normalizedDest));
 
-      await fs.promises.rename(sourcePath, destinationPath);
+      await fs.promises.rename(normalizedSource, normalizedDest);
 
-      // Invalidate cache if caching is enabled
-      if (this.cacheEnabled) {
-        this.fileCache.delete(sourcePath);
-        this.fileCache.delete(destinationPath);
+      if (this.logService) {
+        this.logService.debug(
+          `Moved file from ${normalizedSource} to ${normalizedDest}`
+        );
       }
 
       return success(undefined);
     } catch (error) {
-      this.logService?.error(
-        `Error moving file: ${sourcePath} to ${destinationPath}`,
-        error
-      );
-      return failure(error instanceof Error ? error : new Error(String(error)));
+      if (this.logService) {
+        this.logService.error(`Failed to move file: ${error}`);
+      }
+      return failure(new Error(`Failed to move file: ${error}`));
     }
   }
 
