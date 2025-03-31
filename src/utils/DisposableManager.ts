@@ -1,10 +1,10 @@
-import * as vscode from 'vscode';
+import * as vscode from "vscode";
 
 export class DisposableManager {
   private static instance: DisposableManager;
   private disposables: vscode.Disposable[] = [];
 
-  private constructor() { }
+  private constructor() {}
 
   static getInstance(): DisposableManager {
     if (!DisposableManager.instance) {
@@ -18,11 +18,11 @@ export class DisposableManager {
   }
 
   dispose(): void {
-    this.disposables.forEach(d => {
+    this.disposables.forEach((d) => {
       try {
         d.dispose();
       } catch (err) {
-        console.error('Error disposing resource:', err);
+        console.error("Error disposing resource:", err);
       }
     });
     this.disposables = [];
