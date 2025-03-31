@@ -111,6 +111,11 @@ export class FileSystemService implements IFileSystemService {
       options?.pathUtils || new PathUtils({ logService: this.logService });
   }
 
+  // Helper method to join paths using pathUtils
+  private joinPaths(...segments: string[]): string {
+    return this.pathUtils.join(...segments);
+  }
+
   /**
    * Read a file from the file system
    * @param filePath Path to the file
@@ -118,35 +123,32 @@ export class FileSystemService implements IFileSystemService {
    */
   public async readFile(filePath: string): Promise<Result<string, Error>> {
     try {
-      this.logService?.debug(`Reading file: ${filePath}`);
+      const normalizedPath = this.pathUtils.normalize(filePath);
 
-      // Security check
-      if (!this.validatePath(filePath)) {
-        return failure(new Error(`Invalid file path: ${filePath}`));
+      if (!this.validatePath(normalizedPath)) {
+        return failure(new Error(`Invalid path: ${filePath}`));
       }
 
-      // Check cache if enabled
+      // Check cache first if enabled
       if (this.cacheEnabled) {
-        const cached = this.fileCache.get(filePath);
-        const now = Date.now();
-
-        if (cached && now - cached.timestamp < this.cacheExpiryMs) {
-          this.logService?.debug(`Cache hit for file: ${filePath}`);
-          return success(cached.content);
+        const cachedContent = this.getCachedContent(normalizedPath);
+        if (cachedContent !== null) {
+          return success(cachedContent);
         }
       }
 
-      // Read file
-      const content = await fs.promises.readFile(filePath, "utf-8");
+      const content = await fs.promises.readFile(normalizedPath, "utf8");
 
-      // Cache the result if caching is enabled
+      // Cache the content if caching is enabled
       if (this.cacheEnabled) {
-        this.fileCache.set(filePath, { content, timestamp: Date.now() });
+        this.cacheContent(normalizedPath, content);
       }
 
       return success(content);
     } catch (error) {
-      this.logService?.error(`Error reading file: ${filePath}`, error);
+      if (this.logService) {
+        this.logService.error(`Failed to read file: ${filePath}`, error);
+      }
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -169,58 +171,46 @@ export class FileSystemService implements IFileSystemService {
     }
   ): Promise<Result<void, Error>> {
     try {
-      this.logService?.debug(`Writing to file: ${filePath}`);
+      const normalizedPath = this.pathUtils.normalize(filePath);
 
-      // Security check
-      if (!this.validatePath(filePath)) {
-        return failure(new Error(`Invalid file path: ${filePath}`));
+      if (!this.validatePath(normalizedPath)) {
+        return failure(new Error(`Invalid path: ${filePath}`));
       }
 
       // Ensure the directory exists
-      const dirResult = await this.ensureDirectoryExists(
-        path.dirname(filePath)
-      );
+      const dirPath = this.pathUtils.dirname(normalizedPath);
+      const dirResult = await this.ensureDirectoryExists(dirPath);
       if (dirResult.isFailure()) {
-        return failure(dirResult.error);
+        return dirResult;
       }
 
-      // Atomic write operation if requested
+      // Handle atomic write if requested
       if (options?.atomic) {
-        const tempPath = `${filePath}.tmp.${Date.now()}`;
-
-        // Write to temp file first
-        await fs.promises.writeFile(tempPath, content, {
-          encoding: options.encoding as BufferEncoding,
-          mode: options.mode,
-          flag: options.flag,
-        });
-
-        // Rename to target file (atomic on most file systems)
-        await fs.promises.rename(tempPath, filePath);
-
-        // Invalidate cache if caching is enabled
-        if (this.cacheEnabled) {
-          this.fileCache.delete(filePath);
+        const tempFile = await this.createTempFile(content);
+        if (tempFile.isFailure()) {
+          return failure(tempFile.error);
         }
 
-        return success(undefined);
+        await fs.promises.rename(tempFile.value, normalizedPath);
+      } else {
+        // Regular write
+        await fs.promises.writeFile(normalizedPath, content, {
+          encoding: (options?.encoding as BufferEncoding) || "utf8",
+          mode: options?.mode,
+          flag: options?.flag,
+        });
       }
 
-      // Regular write
-      await fs.promises.writeFile(filePath, content, {
-        encoding: options?.encoding as BufferEncoding,
-        mode: options?.mode,
-        flag: options?.flag,
-      });
-
-      // Invalidate cache if caching is enabled
+      // Update cache if enabled
       if (this.cacheEnabled) {
-        this.fileCache.delete(filePath);
+        this.cacheContent(normalizedPath, content);
       }
 
       return success(undefined);
     } catch (error) {
-      this.logService?.error(`Error writing file: ${filePath}`, error);
+      if (this.logService) {
+        this.logService.error(`Failed to write file: ${filePath}`, error);
+      }
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -340,20 +330,21 @@ export class FileSystemService implements IFileSystemService {
     dirPath: string
   ): Promise<Result<void, Error>> {
     try {
-      this.logService?.debug(`Ensuring directory exists: ${dirPath}`);
+      const normalizedPath = this.pathUtils.normalize(dirPath);
 
-      // Security check
-      if (!this.validatePath(dirPath)) {
-        return failure(new Error(`Invalid directory path: ${dirPath}`));
+      if (!this.validatePath(normalizedPath)) {
+        return failure(new Error(`Invalid path: ${dirPath}`));
       }
 
-      await fs.promises.mkdir(dirPath, { recursive: true });
+      await fs.promises.mkdir(normalizedPath, { recursive: true });
       return success(undefined);
     } catch (error) {
-      this.logService?.error(
-        `Error ensuring directory exists: ${dirPath}`,
-        error
-      );
+      if (this.logService) {
+        this.logService.error(
+          `Failed to ensure directory exists: ${dirPath}`,
+          error
+        );
+      }
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -469,7 +460,7 @@ export class FileSystemService implements IFileSystemService {
       const fileName = `${prefix}${Date.now()}-${Math.round(
         Math.random() * 10000
       )}${suffix}`;
-      const filePath = path.join(tmpdir, fileName);
+      const filePath = this.joinPaths(tmpdir, fileName);
 
       this.logService?.debug(`Creating temporary file: ${filePath}`);
 
@@ -511,7 +502,7 @@ export class FileSystemService implements IFileSystemService {
       const fileName = `${prefix}${Date.now()}-${Math.round(
         Math.random() * 10000
       )}${suffix}`;
-      const scriptPath = path.join(tmpdir, fileName);
+      const scriptPath = this.joinPaths(tmpdir, fileName);
 
       this.logService?.debug(`Creating executable script: ${scriptPath}`);
 
@@ -624,7 +615,7 @@ export class FileSystemService implements IFileSystemService {
 
         // Invalidate cache if caching is enabled
         if (this.cacheEnabled && filename) {
-          const fullPath = path.join(pathToWatch, filename);
+          const fullPath = this.joinPaths(pathToWatch, filename);
           this.fileCache.delete(fullPath);
         }
 
@@ -638,7 +629,7 @@ export class FileSystemService implements IFileSystemService {
         }
 
         if (filename) {
-          listener(mappedEvent, path.join(pathToWatch, filename));
+          listener(mappedEvent, this.joinPaths(pathToWatch, filename));
         }
       });
 
@@ -685,7 +676,7 @@ export class FileSystemService implements IFileSystemService {
    * @returns Normalized path
    */
   public normalizePath(...segments: string[]): string {
-    return this.pathUtils.join(...segments);
+    return this.pathUtils.normalize(this.joinPaths(...segments));
   }
 
   /**
@@ -725,7 +716,7 @@ export class FileSystemService implements IFileSystemService {
       });
       const files = entries
         .filter((entry) => entry.isFile())
-        .map((entry) => path.join(dirPath, entry.name));
+        .map((entry) => this.joinPaths(dirPath, entry.name));
 
       return success(files);
     } catch (error) {
@@ -929,7 +920,7 @@ export class FileSystemService implements IFileSystemService {
       const processEvent =
         watchOptions.throttleMs > 0
           ? debounce((event: FileWatcherEvent, filename: string) => {
-              const fullPath = path.join(dirPath, filename);
+              const fullPath = this.joinPaths(dirPath, filename);
 
               // Check extension filter if specified
               if (watchOptions.extensions.length > 0) {
@@ -951,7 +942,7 @@ export class FileSystemService implements IFileSystemService {
               listener(event, fullPath);
             }, watchOptions.throttleMs)
           : (event: FileWatcherEvent, filename: string) => {
-              const fullPath = path.join(dirPath, filename);
+              const fullPath = this.joinPaths(dirPath, filename);
               listener(event, fullPath);
             };
 
@@ -967,7 +958,7 @@ export class FileSystemService implements IFileSystemService {
           // Map the raw event type to our enum
           let event: FileWatcherEvent = "change";
           if (eventType === "rename") {
-            const fullPath = path.join(dirPath, filename);
+            const fullPath = this.joinPaths(dirPath, filename);
             if (fs.existsSync(fullPath)) {
               event = "create";
             } else {
@@ -1052,7 +1043,7 @@ export class FileSystemService implements IFileSystemService {
 
                 let event: FileWatcherEvent = "change";
                 if (eventType === "rename") {
-                  const fullPath = path.join(currentPath, filename);
+                  const fullPath = this.joinPaths(currentPath, filename);
                   if (fs.existsSync(fullPath)) {
                     event = "create";
                   } else {
@@ -1060,7 +1051,7 @@ export class FileSystemService implements IFileSystemService {
                   }
                 }
 
-                listener(event, path.join(currentPath, filename));
+                listener(event, this.joinPaths(currentPath, filename));
               }
             );
           } else {
@@ -1218,7 +1209,7 @@ export class FileSystemService implements IFileSystemService {
           fileName: string,
           content: string
         ): Promise<string> => {
-          const filePath = path.join(tempDirPath, fileName);
+          const filePath = this.joinPaths(tempDirPath, fileName);
           const writeResult = await this.writeFile(filePath, content, {
             atomic: true,
           });
@@ -1293,6 +1284,102 @@ export class FileSystemService implements IFileSystemService {
       this.logService?.error("Failed to clean up temporary files", error);
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
+  }
+
+  /**
+   * Get cached content for a file if available and not expired
+   * @param filePath Path to the file
+   * @returns Cached content or null if not cached or expired
+   */
+  private getCachedContent(filePath: string): string | null {
+    if (!this.cacheEnabled) {
+      return null;
+    }
+
+    const cached = this.fileCache.get(filePath);
+    if (!cached) {
+      return null;
+    }
+
+    // Check if cache entry has expired
+    const now = Date.now();
+    if (now - cached.timestamp > this.cacheExpiryMs) {
+      this.fileCache.delete(filePath);
+      return null;
+    }
+
+    return cached.content;
+  }
+
+  /**
+   * Cache content for a file
+   * @param filePath Path to the file
+   * @param content File content to cache
+   */
+  private cacheContent(filePath: string, content: string): void {
+    if (!this.cacheEnabled) {
+      return;
+    }
+
+    this.fileCache.set(filePath, {
+      content,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Gets the directory name of a path using pathUtils
+   * @param filePath The file path
+   * @returns The directory containing the file
+   */
+  public getDirname(filePath: string): string {
+    return this.pathUtils.dirname(filePath);
+  }
+
+  /**
+   * Gets the base name of a path using pathUtils
+   * @param filePath The file path
+   * @returns The file name
+   */
+  public getBasename(filePath: string): string {
+    return this.pathUtils.basename(filePath);
+  }
+
+  /**
+   * Resolves a path to an absolute path using pathUtils
+   * @param filePath The file path to resolve
+   * @returns The absolute path
+   */
+  public resolvePath(filePath: string): string {
+    return this.pathUtils.resolve(process.cwd(), filePath);
+  }
+
+  /**
+   * Gets the relative path from one path to another using pathUtils
+   * @param from The source path
+   * @param to The target path
+   * @returns The relative path
+   */
+  public relativePath(from: string, to: string): string {
+    return this.pathUtils.relative(from, to);
+  }
+
+  /**
+   * Checks if a path is absolute using pathUtils
+   * @param filePath The path to check
+   * @returns True if the path is absolute
+   */
+  public isAbsolutePath(filePath: string): boolean {
+    return this.pathUtils.isAbsolute(filePath);
+  }
+
+  /**
+   * Gets the extension of a file using pathUtils
+   * @param filePath The file path
+   * @returns The file extension
+   */
+  public getExtension(filePath: string): string {
+    return this.pathUtils.extname(filePath);
   }
 
   /**
