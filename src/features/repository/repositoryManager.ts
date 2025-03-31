@@ -813,8 +813,43 @@ Repository Path: ${repoPath}\n\n`;
         });
       }
 
-      // Request push to tracking repository
-      this.requestPush(this.logFilePath, trackingFilePath);
+      // Try to push changes using safe temporary file handling
+      try {
+        if (this.gitService) {
+          // Use the GitService's safe temporary file methods for push operation
+          const scriptResult = await this.gitService.createAdvancedPushScript(
+            this.logFilePath,
+            trackingFilePath,
+            {
+              commitMessage: `Update commit log for ${repoName}:${headCommit.substring(
+                0,
+                7
+              )}`,
+              autoClose: true,
+              timeout: 30, // 30 seconds timeout for push operation
+            }
+          );
+
+          if (scriptResult.isFailure()) {
+            this.logService?.warn(
+              `Failed to create push script: ${scriptResult.error.message}`
+            );
+          } else {
+            // Request push operation via command manager or directly
+            this.requestPush(this.logFilePath, trackingFilePath);
+            this.logService?.info(
+              `Push operation requested with safe script: ${scriptResult.value}`
+            );
+          }
+        }
+      } catch (err) {
+        // Just log the error but don't fail the commit logging operation
+        this.logService?.warn(
+          `Push operation setup failed: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
 
       return success(trackingFilePath);
     } catch (error) {
