@@ -293,13 +293,20 @@ export class ExtensionManager {
 
     // Only initialize the repository manager if configuration is valid
     if (isConfigured) {
-      // Pass configurationService to repository manager
-      const repoInitResult = await this.repositoryManager.initialize();
+      const result = await this.repositoryManager.initialize();
 
-      if (repoInitResult.isFailure()) {
-        this.statusManager.setErrorStatus(
-          "Failed to initialize repository tracking"
+      if (result.isSuccess()) {
+        this.logService.info("Repository manager initialized successfully");
+
+        // Set up file watchers
+        if (this.fileSystemService) {
+          this.repositoryManager.setupLogFileWatcher();
+        }
+      } else {
+        this.logService.error(
+          `Repository manager initialization failed: ${result.error.message}`
         );
+        this.statusManager.setErrorStatus("Repository Error");
       }
     } else {
       this.statusManager.setSetupNeededStatus();
