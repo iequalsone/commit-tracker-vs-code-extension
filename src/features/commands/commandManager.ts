@@ -41,6 +41,17 @@ export class CommandManager implements vscode.Disposable {
     this.statusManager = statusManager;
     this.repositoryManager = repositoryManager;
     this.fileSystemService = fileSystemService;
+
+    // Log if FileSystemService is available
+    if (this.fileSystemService) {
+      this.logService.debug(
+        "CommandManager initialized with FileSystemService"
+      );
+    } else {
+      this.logService.warn(
+        "CommandManager initialized without FileSystemService, some operations may not work"
+      );
+    }
   }
 
   public setupRepositoryEventListeners(): void {
@@ -875,57 +886,56 @@ sleep 5
     );
 
     if (!this.fileSystemService) {
-      this.logService.error("FileSystemService is not available");
+      this.logService.error("FileSystemService not available");
       vscode.window.showErrorMessage(
-        "Could not create Git operation terminal: FileSystemService is not available"
+        "Unable to create terminal: File system service not available"
       );
       return undefined;
     }
 
     try {
-      // Create a temporary shell script with the given content
+      // Create a temporary script file using FileSystemService
       const scriptResult = await this.fileSystemService.createExecutableScript(
         scriptContent,
-        { prefix: "commit-tracker-" }
+        { prefix: "commit-tracker-", suffix: ".sh" }
       );
 
       if (scriptResult.isFailure()) {
-        this.logService.error(`Failed to create script: ${scriptResult.error}`);
-        vscode.window.showErrorMessage(
-          `Failed to create script: ${scriptResult.error.message}`
-        );
-        return undefined;
+        throw scriptResult.error;
       }
 
       const scriptPath = scriptResult.value;
+      this.logService.info(`Created script at: ${scriptPath}`);
 
-      // Create and show terminal
+      // Create terminal and execute the script
       const terminal = vscode.window.createTerminal({
         name: terminalName,
         cwd: workingDirectory,
       });
 
       terminal.show();
-      terminal.sendText(`bash "${scriptPath}" && exit`);
+      terminal.sendText(`bash "${scriptPath}" && exit || exit`);
 
-      // Schedule cleanup of the script file after a while
+      // Clean up script after a delay
       setTimeout(async () => {
         try {
-          await this.fileSystemService!.deleteFile(scriptPath);
-          this.logService.debug(`Deleted temporary script: ${scriptPath}`);
+          const deleteResult = await this.fileSystemService!.deleteFile(
+            scriptPath
+          );
+          if (deleteResult.isFailure()) {
+            this.logService.warn(
+              `Failed to delete temporary script: ${deleteResult.error.message}`
+            );
+          }
         } catch (error) {
-          this.logService.warn(`Failed to delete temporary script: ${error}`);
+          this.logService.warn(`Error deleting temporary script: ${error}`);
         }
       }, 10000);
 
       return terminal;
     } catch (error) {
-      this.logService.error(
-        `Failed to create Git operation terminal: ${error}`
-      );
-      vscode.window.showErrorMessage(
-        `Failed to create Git operation terminal: ${error}`
-      );
+      this.logService.error(`Error creating Git operation terminal: ${error}`);
+      vscode.window.showErrorMessage(`Failed to create terminal: ${error}`);
       return undefined;
     }
   }
@@ -938,92 +948,78 @@ sleep 5
     trackingFilePath: string
   ): Promise<void> {
     try {
-      this.logService.info(`Handling push request for: ${trackingFilePath}`);
+      this.logService.info(`Push request received for ${trackingFilePath}`);
       this.statusManager.showPushingStatus();
 
+      // Validate file paths
       if (!this.fileSystemService) {
-        this.logService.error("FileSystemService is not available");
-        vscode.window.showErrorMessage(
-          "Could not push changes: FileSystemService is not available"
-        );
-        return;
+        throw new Error("FileSystemService not available");
       }
 
-      const fileExistsResult = await this.fileSystemService.exists(
+      // Verify paths exist
+      const logPathExists = await this.fileSystemService.exists(logFilePath);
+      if (logPathExists.isFailure() || !logPathExists.value) {
+        throw new Error(`Log directory does not exist: ${logFilePath}`);
+      }
+
+      const trackingFileExists = await this.fileSystemService.exists(
         trackingFilePath
       );
-      if (fileExistsResult.isFailure() || !fileExistsResult.value) {
-        this.logService.error(
-          `Tracking file does not exist: ${trackingFilePath}`
-        );
-        vscode.window.showErrorMessage(
-          `Could not push changes: File not found`
-        );
-        return;
+      if (trackingFileExists.isFailure() || !trackingFileExists.value) {
+        throw new Error(`Tracking file does not exist: ${trackingFilePath}`);
       }
 
-      // Create script content for git operations
+      // Create script content
       const scriptContent = `#!/bin/bash
-# Commit-tracker push script
-echo "=== Commit Tracker Automatic Push ==="
-echo "Repository: ${logFilePath}"
+# Manual push script
+echo "=== Commit Tracker Manual Push ==="
+echo "Current directory: ${logFilePath}"
+cd "${logFilePath}"
+echo "Git status:"
+git status
+echo "Pushing changes..."
+git push
+PUSH_RESULT=$?
+echo "Push complete, new status:"
+git status
 
-# Change to the repository directory
-cd "${logFilePath}" || { echo "Failed to change to repository directory"; exit 1; }
-
-# Stage the file
-echo "Adding file: ${path.basename(trackingFilePath)}"
-git add "${path.relative(logFilePath, trackingFilePath)}"
-
-# Commit changes if needed
-if git status --porcelain | grep -q .; then
-  echo "Changes detected, committing..."
-  git commit -m "Update commit log - $(date -Iseconds)"
-  echo "Commit successful"
+if [ $PUSH_RESULT -eq 0 ]; then
+  echo "Push successful!"
 else
-  echo "No changes to commit"
-  sleep 2 # Give user time to see the message
-  exit 0
+  echo "Push failed with status $PUSH_RESULT"
+  echo "You may need to push manually or set up credentials"
 fi
 
-# Check if remote exists
-if git remote | grep -q origin; then
-  echo "Remote 'origin' exists"
-  
-  # Get current branch
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  echo "Current branch: $CURRENT_BRANCH"
-  
-  # Push changes
-  echo "Pushing changes to origin/$CURRENT_BRANCH..."
-  git push
-  
-  # Check if push succeeded
-  if [ $? -eq 0 ]; then
-    echo "Push successful!"
-  else
-    echo "Push failed, please push manually"
-    git status
-  fi
-else
-  echo "No remote 'origin' configured, skipping push"
-fi
-
-echo "=== Commit Tracker Push Complete ==="
-echo "Terminal will close in 3 seconds..."
-sleep 3
+echo "Terminal will close in 5 seconds..."
+sleep 5
 `;
 
-      // Create terminal to execute script
-      await this.createGitOperationTerminal(
+      // Create terminal and run script
+      const terminal = await this.createGitOperationTerminal(
         logFilePath,
         scriptContent,
         "Commit Tracker Push"
       );
+
+      if (!terminal) {
+        throw new Error("Failed to create terminal");
+      }
+
+      // Update status bar with a delayed refresh
+      setTimeout(() => {
+        this.statusManager.refresh();
+      }, 7000);
+
+      this.logService.info("Push operation started in terminal");
     } catch (error) {
-      this.logService.error(`Error handling push request: ${error}`);
+      this.logService.error(`Push operation failed: ${error}`);
       this.statusManager.showPushFailedStatus();
-      vscode.window.showErrorMessage(`Failed to push changes: ${error}`);
+      vscode.window.showErrorMessage(`Push failed: ${error}`);
+
+      // Restore normal status after a delay
+      setTimeout(() => {
+        this.statusManager.setTrackingStatus();
+      }, 3000);
     }
   }
 }
