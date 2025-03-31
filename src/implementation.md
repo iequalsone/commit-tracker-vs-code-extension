@@ -165,12 +165,12 @@ Step 2: Create Implementation
 [x] Implement consistent formatting across notification types
 
 Step 3: Add Enhanced Features
-[] Add notification importance/priority levels
-[] Implement notification persistence options
-[] Create notification dismissal tracking
-[] Add progress notification support for long-running operations
-[] Implement rich markdown formatting in notifications
-[] Add support for actionable notifications with callbacks
+[x] Add notification importance/priority levels
+[x] Implement notification persistence options
+[x] Create notification dismissal tracking
+[x] Add progress notification support for long-running operations
+[x] Implement rich markdown formatting in notifications
+[x] Add support for actionable notifications with callbacks
 
 Step 4: Update ExtensionManager
 [] Register NotificationService in ExtensionManager
