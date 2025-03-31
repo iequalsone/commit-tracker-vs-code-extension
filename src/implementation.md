@@ -137,7 +137,7 @@ Step 6: Refactor Components
 [x] Update GitService to use IFileSystemService
 [x] Refactor RepositoryManager to use the service
 [x] Migrate SetupManager and SetupWizard usage
-[] Update any CommandManager file operations
+[x] Update any CommandManager file operations
 
 Step 7: Add Enhanced Functionality
 [] Implement file watcher capabilities
