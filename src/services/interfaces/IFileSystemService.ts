@@ -308,4 +308,47 @@ export interface IFileSystemService extends vscode.Disposable {
     prefix?: string;
     deleteOnExit?: boolean;
   }): Promise<Result<TempDirectoryHandle, Error>>;
+
+  /**
+   * Gets the directory name of a path
+   * @param filePath The file path
+   * @returns The directory containing the file
+   */
+  getDirname(filePath: string): string;
+
+  /**
+   * Gets the base name of a path
+   * @param filePath The file path
+   * @returns The file name
+   */
+  getBasename(filePath: string): string;
+
+  /**
+   * Resolves a path to an absolute path
+   * @param filePath The file path to resolve
+   * @returns The absolute path
+   */
+  resolvePath(filePath: string): string;
+
+  /**
+   * Gets the relative path from one path to another
+   * @param from The source path
+   * @param to The target path
+   * @returns The relative path
+   */
+  relativePath(from: string, to: string): string;
+
+  /**
+   * Checks if a path is absolute
+   * @param filePath The path to check
+   * @returns True if the path is absolute
+   */
+  isAbsolutePath(filePath: string): boolean;
+
+  /**
+   * Gets the extension of a file
+   * @param filePath The file path
+   * @returns The file extension
+   */
+  getExtension(filePath: string): string;
 }
