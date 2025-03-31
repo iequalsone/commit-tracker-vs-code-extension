@@ -1406,6 +1406,255 @@ export class FileSystemService implements IFileSystemService {
   }
 
   /**
+   * List files recursively in a directory
+   * @param dirPath Path to the directory
+   * @param options Options for recursive listing
+   * @returns Result containing array of file paths
+   */
+  public async listFilesRecursively(
+    dirPath: string,
+    options?: {
+      filter?: RegExp;
+      maxDepth?: number;
+      includeDirectories?: boolean;
+    }
+  ): Promise<Result<string[], Error>> {
+    try {
+      if (!this.validatePath(dirPath)) {
+        return failure(new Error(`Invalid path: ${dirPath}`));
+      }
+
+      // Check if directory exists
+      const exists = await this.directoryExists(dirPath);
+      if (exists.isFailure()) {
+        return failure(exists.error);
+      }
+      if (!exists.value) {
+        return failure(new Error(`Directory does not exist: ${dirPath}`));
+      }
+
+      // Initialize options
+      const maxDepth = options?.maxDepth ?? Infinity;
+      const filter = options?.filter;
+      const includeDirectories = options?.includeDirectories ?? false;
+
+      // Helper function for recursive traversal
+      const traverse = async (
+        currentPath: string,
+        depth: number,
+        results: string[]
+      ): Promise<void> => {
+        if (depth > maxDepth) {
+          return;
+        }
+
+        const entriesResult = await this.listDirectory(currentPath);
+        if (entriesResult.isFailure()) {
+          this.logService?.error(
+            `Failed to list directory ${currentPath}: ${entriesResult.error.message}`
+          );
+          return;
+        }
+
+        const entries = entriesResult.value;
+
+        for (const entry of entries) {
+          const fullPath = this.normalizePath(currentPath, entry);
+
+          // Get stats to determine if it's a file or directory
+          const statsResult = await this.getFileStats(fullPath);
+          if (statsResult.isFailure()) {
+            this.logService?.warn(
+              `Failed to get stats for ${fullPath}: ${statsResult.error.message}`
+            );
+            continue;
+          }
+
+          const stats = statsResult.value;
+
+          if (stats.isDirectory) {
+            if (includeDirectories && (!filter || filter.test(fullPath))) {
+              results.push(fullPath);
+            }
+            // Recursively traverse subdirectories
+            await traverse(fullPath, depth + 1, results);
+          } else if (stats.isFile) {
+            if (!filter || filter.test(fullPath)) {
+              results.push(fullPath);
+            }
+          }
+        }
+      };
+
+      const results: string[] = [];
+      await traverse(dirPath, 1, results);
+
+      return success(results);
+    } catch (error) {
+      this.logService?.error(`Error in listFilesRecursively: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Copy a directory recursively
+   * @param sourcePath Source directory path
+   * @param destinationPath Destination directory path
+   * @param options Options for recursive copy
+   * @returns Result indicating success or failure
+   */
+  public async copyDirectoryRecursively(
+    sourcePath: string,
+    destinationPath: string,
+    options?: {
+      overwrite?: boolean;
+      filter?: RegExp;
+      excludeGitDir?: boolean;
+    }
+  ): Promise<Result<void, Error>> {
+    try {
+      if (
+        !this.validatePath(sourcePath) ||
+        !this.validatePath(destinationPath)
+      ) {
+        return failure(new Error(`Invalid path provided`));
+      }
+
+      // Check if source directory exists
+      const sourceExists = await this.directoryExists(sourcePath);
+      if (sourceExists.isFailure()) {
+        return failure(sourceExists.error);
+      }
+      if (!sourceExists.value) {
+        return failure(
+          new Error(`Source directory does not exist: ${sourcePath}`)
+        );
+      }
+
+      // Create destination directory if it doesn't exist
+      const ensureDirResult = await this.ensureDirectoryExists(destinationPath);
+      if (ensureDirResult.isFailure()) {
+        return failure(ensureDirResult.error);
+      }
+
+      // Get all files and directories from source
+      const filesResult = await this.listFilesRecursively(sourcePath, {
+        includeDirectories: true,
+      });
+      if (filesResult.isFailure()) {
+        return failure(filesResult.error);
+      }
+
+      const allPaths = filesResult.value;
+
+      // Process each file/directory
+      for (const filePath of allPaths) {
+        // Skip if filtered out
+        if (options?.filter && !options.filter.test(filePath)) {
+          continue;
+        }
+
+        // Skip .git directory if excludeGitDir is true
+        if (options?.excludeGitDir && filePath.includes("/.git/")) {
+          continue;
+        }
+
+        // Get relative path from source
+        const relativePath = filePath.slice(sourcePath.length);
+        const targetPath = this.normalizePath(destinationPath, relativePath);
+
+        // Get stats to determine if it's a file or directory
+        const statsResult = await this.getFileStats(filePath);
+        if (statsResult.isFailure()) {
+          this.logService?.warn(
+            `Failed to get stats for ${filePath}: ${statsResult.error.message}`
+          );
+          continue;
+        }
+
+        if (statsResult.value.isDirectory) {
+          // Ensure directory exists in destination
+          const ensureResult = await this.ensureDirectoryExists(targetPath);
+          if (ensureResult.isFailure()) {
+            this.logService?.warn(
+              `Failed to create directory ${targetPath}: ${ensureResult.error.message}`
+            );
+          }
+        } else if (statsResult.value.isFile) {
+          // Check if target file exists and if we should overwrite
+          const targetExists = await this.fileExists(targetPath);
+          if (
+            targetExists.isSuccess() &&
+            targetExists.value &&
+            !options?.overwrite
+          ) {
+            this.logService?.info(`Skipping existing file: ${targetPath}`);
+            continue;
+          }
+
+          // Copy file
+          const copyResult = await this.copyFile(filePath, targetPath);
+          if (copyResult.isFailure()) {
+            this.logService?.warn(
+              `Failed to copy file ${filePath}: ${copyResult.error.message}`
+            );
+          }
+        }
+      }
+
+      return success(undefined);
+    } catch (error) {
+      this.logService?.error(`Error in copyDirectoryRecursively: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Find files matching a pattern recursively
+   * @param dirPath Directory to search
+   * @param pattern Regex pattern to match against file names
+   * @param options Search options
+   * @returns Result containing array of matching file paths
+   */
+  public async findFiles(
+    dirPath: string,
+    pattern: RegExp,
+    options?: {
+      maxDepth?: number;
+      maxResults?: number;
+    }
+  ): Promise<Result<string[], Error>> {
+    try {
+      if (!this.validatePath(dirPath)) {
+        return failure(new Error(`Invalid path: ${dirPath}`));
+      }
+
+      const maxResults = options?.maxResults ?? Infinity;
+
+      const filesResult = await this.listFilesRecursively(dirPath, {
+        filter: pattern,
+        maxDepth: options?.maxDepth,
+        includeDirectories: false,
+      });
+
+      if (filesResult.isFailure()) {
+        return failure(filesResult.error);
+      }
+
+      // Apply result limit if specified
+      let results = filesResult.value;
+      if (maxResults < results.length) {
+        results = results.slice(0, maxResults);
+      }
+
+      return success(results);
+    } catch (error) {
+      this.logService?.error(`Error in findFiles: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
    * Clean up resources used by the service
    */
   public dispose(): void {
