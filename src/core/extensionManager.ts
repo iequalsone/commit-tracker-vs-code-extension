@@ -21,6 +21,8 @@ import { ConfigurationService } from "../services/configurationService";
 import { IConfigurationService } from "../services/interfaces/IConfigurationService";
 import { FileSystemService } from "../services/fileSystemService";
 import { DisposableManager } from "../utils/DisposableManager";
+import { PathUtils } from "../services/pathUtils";
+import { IPathUtils } from "../services/interfaces/IPathUtils";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -58,9 +60,12 @@ export class ExtensionManager {
       this.logService
     );
 
+    const pathUtils = new PathUtils({ logService: this.logService });
+
     this.fileSystemService = new FileSystemService({
       logService: this.logService,
       cacheEnabled: true,
+      pathUtils: pathUtils,
     });
 
     this.gitService = new GitService({
@@ -212,8 +217,16 @@ export class ExtensionManager {
       },
     };
 
-    // Create file system service
-    const fileSystemService = this.fileSystemService;
+    const pathUtils = new PathUtils({ logService: this.logService });
+
+    // Create file system service with path utils
+    const fileSystemService = new FileSystemService({
+      logService: this.logService,
+      cacheEnabled: true,
+      pathUtils: pathUtils,
+    });
+
+    this.fileSystemService = fileSystemService;
 
     // Initialize with all dependencies
     this.gitService = new GitService({
