@@ -351,4 +351,52 @@ export interface IFileSystemService extends vscode.Disposable {
    * @returns The file extension
    */
   getExtension(filePath: string): string;
+
+  /**
+   * List files recursively in a directory
+   * @param dirPath Path to the directory
+   * @param options Options for recursive listing
+   * @returns Result containing array of file paths
+   */
+  listFilesRecursively(
+    dirPath: string,
+    options?: {
+      filter?: RegExp;
+      maxDepth?: number;
+      includeDirectories?: boolean;
+    }
+  ): Promise<Result<string[], Error>>;
+
+  /**
+   * Copy a directory recursively
+   * @param sourcePath Source directory path
+   * @param destinationPath Destination directory path
+   * @param options Options for recursive copy
+   * @returns Result indicating success or failure
+   */
+  copyDirectoryRecursively(
+    sourcePath: string,
+    destinationPath: string,
+    options?: {
+      overwrite?: boolean;
+      filter?: RegExp;
+      excludeGitDir?: boolean;
+    }
+  ): Promise<Result<void, Error>>;
+
+  /**
+   * Find files matching a pattern recursively
+   * @param dirPath Directory to search
+   * @param pattern Regex pattern to match against file names
+   * @param options Search options
+   * @returns Result containing array of matching file paths
+   */
+  findFiles(
+    dirPath: string,
+    pattern: RegExp,
+    options?: {
+      maxDepth?: number;
+      maxResults?: number;
+    }
+  ): Promise<Result<string[], Error>>;
 }
