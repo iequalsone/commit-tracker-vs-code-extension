@@ -143,24 +143,16 @@ Step 7: Add Enhanced Functionality
 [x] Implement file watcher capabilities
 [x] Add safe temporary file handling
 [x] Create path normalization utilities
-[x] Verify fileSystemService is using pathUtils properly
-[x] Update all methods in FileSystemService to use the pathUtils consistently
-[x] Update the watchPath, listDirectory, copyFile, and other methods to use pathUtils
 [] Add recursive directory operations
 [] Implement file permission management
 
-Step 8: Testing Support
-[] Create mock implementation for unit tests
-[] Add in-memory filesystem support for testing
-[] Implement filesystem operation simulation capability
-
-Step 9: Documentation
+Step 8: Documentation
 [] Add JSDoc comments to all methods
 [] Create usage examples for common scenarios
 [] Document security considerations
 [] Update any README sections on file operations
 
-Step 10: Final Validation
+Step 9: Final Validation
 [] Verify all file operations work correctly
 [] Validate security protections (path traversal, etc.)
 [] Test error handling scenarios
