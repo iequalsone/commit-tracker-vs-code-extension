@@ -147,10 +147,54 @@ Step 7: Add Enhanced Functionality
 [x] Implement file permission management
 
 Phase 4d: Create NotificationService
-[] Manage all user notifications
-[] Support different notification types (info, warning, error)
-[] Allow for notification throttling/grouping
-[] Provide a consistent notification experience
+Step 1: Define Interface
+[x] Create /services/interfaces/INotificationService.ts interface
+[x] Define core notification methods (info, warning, error)
+[x] Add notification configuration options (timeout, actions, modal)
+[x] Include throttling/grouping configuration options
+[x] Define notification history tracking methods
+[x] Add proper JSDoc documentation for all methods
+
+Step 2: Create Implementation
+[] Create /services/notificationService.ts
+[] Implement basic notification display methods using VS Code API
+[] Add throttling logic to prevent notification spam
+[] Implement notification grouping for related messages
+[] Add logging integration with LogService
+[] Create notification history tracking mechanism
+[] Implement consistent formatting across notification types
+
+Step 3: Add Enhanced Features
+[] Add notification importance/priority levels
+[] Implement notification persistence options
+[] Create notification dismissal tracking
+[] Add progress notification support for long-running operations
+[] Implement rich markdown formatting in notifications
+[] Add support for actionable notifications with callbacks
+
+Step 4: Update ExtensionManager
+[] Register NotificationService in ExtensionManager
+[] Configure proper dependency injection
+[] Set up default implementation
+
+Step 5: Refactor Existing Components
+[] Update RepositoryManager to use NotificationService
+[] Refactor CommandManager to use the service
+[] Migrate StatusManager notification calls
+[] Update SetupManager and SetupWizard
+[] Ensure all direct vscode.window.show\* calls are replaced
+
+Step 6: Testing and Documentation
+[] Create comprehensive JSDoc documentation with examples
+[] Implement unit tests for throttling and grouping behavior
+[] Test with various notification scenarios
+[] Create usage examples in documentation
+
+Step 7: Final Integration
+[] Create compatibility layer for existing notification calls
+[] Ensure consistent notification style across extension
+[] Document best practices for using the service
+[] Review notification messages for clarity and usefulness
 
 Phase 4e: Create ErrorHandlingService
 [] Enhanced error handling and reporting
