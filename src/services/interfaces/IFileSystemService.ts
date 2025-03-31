@@ -1,5 +1,6 @@
 import { Result } from "../../utils/results";
 import * as vscode from "vscode";
+import { TempDirectoryHandle, TempFileHandle } from "./ITempFileHandles";
 
 /**
  * File watching event type definitions
@@ -281,4 +282,30 @@ export interface IFileSystemService extends vscode.Disposable {
     listener: (event: FileWatcherEvent, filePath: string) => void,
     options?: FileWatcherOptions
   ): Result<FileWatcher, Error>;
+
+  /**
+   * Creates a temporary file with automatic cleanup
+   * @param content File content
+   * @param options Options for creating the temp file
+   * @returns Result containing the temp file handle with path and cleanup method
+   */
+  createTempFileWithCleanup(
+    content: string,
+    options?: {
+      prefix?: string;
+      suffix?: string;
+      mode?: number;
+      deleteOnExit?: boolean;
+    }
+  ): Promise<Result<TempFileHandle, Error>>;
+
+  /**
+   * Creates a temporary directory with automatic cleanup
+   * @param options Options for creating the temp directory
+   * @returns Result containing the temp directory handle with path and cleanup method
+   */
+  createTempDirectoryWithCleanup(options?: {
+    prefix?: string;
+    deleteOnExit?: boolean;
+  }): Promise<Result<TempDirectoryHandle, Error>>;
 }
