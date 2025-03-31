@@ -66,4 +66,29 @@ export interface IPathUtils {
    * @returns Extension portion of the path (including the dot)
    */
   extname(path: string): string;
+
+  /**
+   * Checks if a file has specific permissions
+   * @param filePath Path to the file
+   * @param mode Expected permission mode (octal number)
+   * @returns Promise resolving to true if file has expected permissions
+   */
+  hasPermissions(filePath: string, mode: number): Promise<boolean>;
+
+  /**
+   * Sets permissions on a file
+   * @param filePath Path to the file
+   * @param mode Permission mode to set (octal number)
+   * @returns Promise resolving when permissions are set
+   */
+  setPermissions(filePath: string, mode: number): Promise<void>;
+
+  /**
+   * Makes a file executable
+   * @param filePath Path to the file
+   * @returns Promise resolving when file is made executable
+   */
+  makeExecutable(filePath: string): Promise<void>;
+
+  getExecutableExtension(): string;
 }
