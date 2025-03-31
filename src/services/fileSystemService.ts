@@ -15,6 +15,8 @@ import {
   TempFileHandle,
   TempDirectoryHandle,
 } from "./interfaces/ITempFileHandles";
+import { PathUtils } from "./pathUtils";
+import { IPathUtils } from "./interfaces/IPathUtils";
 
 /**
  * Implementation of FileWatcher interface
@@ -80,6 +82,7 @@ export class FileSystemService implements IFileSystemService {
   >;
   private activeWatchers: Map<string, FileWatcherImpl> = new Map();
   private tempFileManager: TempFileManager;
+  private readonly pathUtils: IPathUtils;
 
   /**
    * Creates a new FileSystemService
@@ -89,6 +92,7 @@ export class FileSystemService implements IFileSystemService {
     logService?: ILogService;
     cacheEnabled?: boolean;
     cacheExpiryMs?: number;
+    pathUtils?: IPathUtils;
   }) {
     this.logService = options?.logService;
     this.cacheEnabled = options?.cacheEnabled ?? false;
@@ -101,6 +105,10 @@ export class FileSystemService implements IFileSystemService {
     });
 
     this.tempFileManager = new TempFileManager(options?.logService);
+
+    // Initialize path utils with provided instance or create a new one
+    this.pathUtils =
+      options?.pathUtils || new PathUtils({ logService: this.logService });
   }
 
   /**
@@ -656,23 +664,7 @@ export class FileSystemService implements IFileSystemService {
    * @returns True if path is valid and safe
    */
   public validatePath(pathToValidate: string): boolean {
-    // Check for null or undefined
-    if (!pathToValidate) {
-      return false;
-    }
-
-    // Normalize the path to resolve any . or .. segments
-    const normalizedPath = path.normalize(pathToValidate);
-
-    // Check for path traversal attempts
-    if (normalizedPath.includes("..")) {
-      this.logService?.warn(
-        `Path validation failed, possible traversal attempt: ${pathToValidate}`
-      );
-      return false;
-    }
-
-    return true;
+    return this.pathUtils.isPathSafe(pathToValidate);
   }
 
   /**
@@ -693,7 +685,7 @@ export class FileSystemService implements IFileSystemService {
    * @returns Normalized path
    */
   public normalizePath(...segments: string[]): string {
-    return path.normalize(path.join(...segments));
+    return this.pathUtils.join(...segments);
   }
 
   /**
