@@ -209,6 +209,6 @@ export interface IFileSystemService extends vscode.Disposable {
 
   createExecutableScript(
     content: string,
-    options?: { prefix?: string }
+    options?: { prefix?: string; suffix?: string }
   ): Promise<Result<string, Error>>;
 }
