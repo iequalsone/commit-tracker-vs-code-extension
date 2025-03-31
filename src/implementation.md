@@ -173,8 +173,8 @@ Step 3: Add Enhanced Features
 [x] Add support for actionable notifications with callbacks
 
 Step 4: Update ExtensionManager
-[] Register NotificationService in ExtensionManager
-[] Configure proper dependency injection
+[x] Register NotificationService in ExtensionManager
+[x] Configure proper dependency injection
 [] Set up default implementation
 
 Step 5: Refactor Existing Components
