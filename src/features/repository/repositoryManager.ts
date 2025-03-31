@@ -15,7 +15,10 @@ import {
 } from "../../services/errorHandlingService";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
-import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
+import {
+  FileWatcher,
+  IFileSystemService,
+} from "../../services/interfaces/IFileSystemService";
 
 /**
  * Repository status information
@@ -481,6 +484,20 @@ export class RepositoryManager extends EventEmitter {
 
       // Check for unpushed commits
       await this.checkUnpushedCommits();
+
+      // Set up log file watcher
+      if (this.logFilePath && this.fileSystemService) {
+        const watcherResult = await this.setupLogFileWatcher();
+        if (watcherResult.isFailure()) {
+          this.logService?.warn(
+            `Could not set up log file watcher: ${watcherResult.error.message}`
+          );
+          // Continue anyway - watcher is not critical
+        }
+      }
+
+      // Add repository git watchers
+      this.setupRepositoryGitWatchers();
 
       return success(true);
     } catch (error) {
@@ -2229,6 +2246,200 @@ Repository Path: ${repoPath}\n\n`;
    */
   public requestPush(logFilePath: string, trackingFilePath: string): void {
     this.emit(RepositoryEvent.PUSH_REQUESTED, logFilePath, trackingFilePath);
+  }
+
+  /**
+   * Set up file watchers to monitor the commit log file
+   * @returns Result indicating success or failure
+   */
+  public async setupLogFileWatcher(): Promise<Result<FileWatcher, Error>> {
+    if (!this.fileSystemService) {
+      return failure(
+        new Error("FileSystemService not available for file watching")
+      );
+    }
+
+    // Get the path to the log file
+    const logFilePath = path.join(this.logFilePath, this.logFile);
+    this.logService?.info(`Setting up watcher for log file: ${logFilePath}`);
+
+    try {
+      // Check if the file exists first
+      const fileExistsResult = await this.fileSystemService.exists(logFilePath);
+      if (fileExistsResult.isFailure()) {
+        return failure(fileExistsResult.error);
+      }
+
+      // If the log file doesn't exist yet, watch the directory instead
+      if (!fileExistsResult.value) {
+        this.logService?.info(
+          `Log file doesn't exist yet, watching directory: ${this.logFilePath}`
+        );
+        return this.setupLogDirectoryWatcher();
+      }
+
+      // Watch the log file for changes
+      const result = this.fileSystemService.watchFile(logFilePath, (event) => {
+        if (event === "change") {
+          this.logService?.debug(`Log file changed: ${logFilePath}`);
+          this.emit(RepositoryEvent.COMMIT_HISTORY_UPDATED);
+
+          // Check for unpushed commits when the log changes
+          this.checkUnpushedCommits()
+            .then((result) => {
+              if (result.isSuccess()) {
+                const hasUnpushed = result.value;
+                this.emit(
+                  RepositoryEvent.UNPUSHED_COMMITS_CHANGED,
+                  hasUnpushed
+                );
+              }
+            })
+            .catch((error) => {
+              this.handleError(
+                error,
+                "checkUnpushedCommits",
+                ErrorType.GIT_OPERATION
+              );
+            });
+        } else if (event === "delete") {
+          this.logService?.warn(`Log file was deleted: ${logFilePath}`);
+          // If the file was deleted, set up a directory watcher
+          this.setupLogDirectoryWatcher();
+        }
+      });
+
+      if (result.isSuccess()) {
+        this.logService?.info(
+          `Successfully set up watcher for log file: ${logFilePath}`
+        );
+        return result;
+      } else {
+        this.logService?.error(
+          `Failed to set up log file watcher: ${result.error.message}`
+        );
+        return failure(result.error);
+      }
+    } catch (error) {
+      this.logService?.error(`Error setting up log file watcher: ${error}`);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  /**
+   * Watch the log directory for file creation or changes
+   * @returns Result indicating success or failure
+   */
+  private setupLogDirectoryWatcher(): Result<FileWatcher, Error> {
+    if (!this.fileSystemService) {
+      return failure(
+        new Error("FileSystemService not available for directory watching")
+      );
+    }
+
+    this.logService?.info(
+      `Setting up watcher for log directory: ${this.logFilePath}`
+    );
+
+    const result = this.fileSystemService.watchDirectory(
+      this.logFilePath,
+      (event, filePath) => {
+        // Only care about the specific log file
+        if (path.basename(filePath) === this.logFile) {
+          if (event === "create" || event === "change") {
+            this.logService?.debug(`Log file ${event}: ${filePath}`);
+            this.emit(RepositoryEvent.COMMIT_HISTORY_UPDATED);
+
+            // Update unpushed commits status
+            this.checkUnpushedCommits()
+              .then((result) => {
+                if (result.isSuccess()) {
+                  this.emit(
+                    RepositoryEvent.UNPUSHED_COMMITS_CHANGED,
+                    result.value
+                  );
+                }
+              })
+              .catch((error) => {
+                this.handleError(
+                  error,
+                  "checkUnpushedCommits",
+                  ErrorType.GIT_OPERATION
+                );
+              });
+          }
+        }
+      },
+      { extensions: [path.extname(this.logFile)] }
+    );
+
+    if (result.isFailure()) {
+      this.logService?.error(
+        `Failed to set up log directory watcher: ${result.error.message}`
+      );
+    } else {
+      this.logService?.info(
+        `Successfully set up watcher for log directory: ${this.logFilePath}`
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * Watch repositories for changes in their .git directories
+   * This is useful for tracking actions like new commits, checkout, etc.
+   */
+  public setupRepositoryGitWatchers(): void {
+    if (!this.fileSystemService) {
+      this.logService?.error(
+        "FileSystemService not available for Git directory watching"
+      );
+      return;
+    }
+
+    // For each repository we're tracking
+    for (const [repoPath, status] of this.repositories.entries()) {
+      const gitDir = path.join(repoPath, ".git");
+
+      // Check if the .git directory exists
+      this.fileSystemService.exists(gitDir).then((result) => {
+        if (result.isSuccess() && result.value) {
+          // Watch these specific files/dirs in the .git directory
+          const pathsToWatch = [
+            path.join(gitDir, "HEAD"), // Current branch/commit
+            path.join(gitDir, "refs"), // Branch and tag references
+            path.join(gitDir, "COMMIT_EDITMSG"), // Last commit message
+          ];
+
+          // Set up the watchers
+          this.fileSystemService!.watchPaths(
+            pathsToWatch.filter((p) => fs.existsSync(p)), // Only watch paths that exist
+            (event, filePath) => {
+              this.logService?.debug(
+                `Git change detected in ${repoPath}: ${filePath} (${event})`
+              );
+
+              // Wait briefly to let Git finish its operations
+              setTimeout(() => {
+                // Update repository status
+                this.updateRepositoryStatus({
+                  rootUri: { fsPath: repoPath },
+                }).then((statusResult) => {
+                  if (statusResult.isSuccess()) {
+                    this.emit(
+                      RepositoryEvent.REPOSITORY_CHANGED,
+                      statusResult.value
+                    );
+                  }
+                });
+              }, 500);
+            },
+            { recursive: true }
+          );
+        }
+      });
+    }
   }
 
   /**
