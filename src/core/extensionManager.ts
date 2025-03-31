@@ -23,6 +23,8 @@ import { FileSystemService } from "../services/fileSystemService";
 import { DisposableManager } from "../utils/DisposableManager";
 import { PathUtils } from "../services/pathUtils";
 import { IPathUtils } from "../services/interfaces/IPathUtils";
+import { INotificationService } from "../services/interfaces/INotificationService";
+import { NotificationService } from "../services/notificationService";
 
 /**
  * Main manager class for the Commit Tracker extension.
@@ -44,6 +46,7 @@ export class ExtensionManager {
   private errorHandlingService: ErrorHandlingService;
   private configurationService: IConfigurationService;
   private fileSystemService: IFileSystemService;
+  private notificationService: INotificationService;
 
   /**
    * Creates a new instance of the ExtensionManager
@@ -67,6 +70,12 @@ export class ExtensionManager {
       cacheEnabled: true,
       pathUtils: pathUtils,
     });
+
+    // Initialize NotificationService before other services that might need to show notifications
+    this.notificationService = new NotificationService(
+      this.logService,
+      this.configurationService
+    );
 
     this.gitService = new GitService({
       logService: this.logService,
@@ -121,6 +130,7 @@ export class ExtensionManager {
     this.disposableManager.register(this.commandManager);
     this.disposableManager.register(this.errorHandlingService);
     this.disposableManager.register(this.fileSystemService);
+    this.disposableManager.register(this.notificationService);
   }
 
   /**
@@ -228,7 +238,12 @@ export class ExtensionManager {
 
     this.fileSystemService = fileSystemService;
 
-    // Initialize with all dependencies
+    // Initialize NotificationService
+    this.notificationService = new NotificationService(
+      this.logService,
+      this.configurationService
+    );
+
     this.gitService = new GitService({
       logService: this.logService,
       terminalProvider,
@@ -237,7 +252,10 @@ export class ExtensionManager {
     });
 
     // Initialize ErrorHandlingService with LogService
-    this.errorHandlingService = new ErrorHandlingService(this.logService);
+    this.errorHandlingService = new ErrorHandlingService(
+      this.logService,
+      this.notificationService
+    );
 
     // Add a workspace provider
     this.gitService.setWorkspaceProvider(() => {
@@ -252,7 +270,10 @@ export class ExtensionManager {
     this.statusManager = new StatusManager(
       this.context,
       this.gitService,
-      this.logService
+      this.logService,
+      undefined,
+      this.configurationService,
+      this.notificationService
     );
     this.statusManager.initialize();
 
@@ -263,7 +284,8 @@ export class ExtensionManager {
       this.configurationService,
       this.gitService,
       undefined,
-      fileSystemService
+      fileSystemService,
+      this.notificationService
     );
 
     this.repositoryManager = new RepositoryManager(
@@ -274,7 +296,8 @@ export class ExtensionManager {
       this.gitService,
       this.configurationService,
       this.logService,
-      fileSystemService
+      fileSystemService,
+      this.notificationService
     );
 
     // Connect GitService to RepositoryManager
@@ -291,7 +314,8 @@ export class ExtensionManager {
       this.setupManager,
       this.statusManager,
       this.repositoryManager,
-      fileSystemService
+      fileSystemService,
+      this.notificationService
     );
 
     // Connect components via events
@@ -352,7 +376,6 @@ export class ExtensionManager {
         }
       )
     );
-
     this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<boolean>(
         "enabled",
@@ -371,7 +394,6 @@ export class ExtensionManager {
         }
       )
     );
-
     this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<number>(
         "updateFrequencyMinutes",
@@ -385,21 +407,18 @@ export class ExtensionManager {
         }
       )
     );
-
     this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFilePath",
         () => this.handleLogConfigChange()
       )
     );
-
     this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string>(
         "logFile",
         () => this.handleLogConfigChange()
       )
     );
-
     this.disposableManager.register(
       this.configurationService.onDidChangeConfigurationValue<string[]>(
         "excludedBranches",
@@ -417,7 +436,6 @@ export class ExtensionManager {
         }
       )
     );
-
     this.disposableManager.register(this.fileSystemService);
   }
 
