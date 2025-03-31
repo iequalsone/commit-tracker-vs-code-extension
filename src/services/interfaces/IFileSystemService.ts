@@ -2,6 +2,39 @@ import { Result } from "../../utils/results";
 import * as vscode from "vscode";
 
 /**
+ * File watching event type definitions
+ */
+export type FileWatcherEvent = "change" | "create" | "delete";
+
+/**
+ * File watcher options
+ */
+export interface FileWatcherOptions {
+  /** Whether to watch recursively (for directories) */
+  recursive?: boolean;
+
+  /** Watch only specific extensions (e.g. ['.log', '.json']) */
+  extensions?: string[];
+
+  /** Exclude patterns (glob patterns) */
+  exclude?: string[];
+
+  /** Throttle events (in ms) to prevent excessive notifications */
+  throttleMs?: number;
+}
+
+/**
+ * File watcher interface
+ */
+export interface FileWatcher {
+  /** Path being watched */
+  readonly path: string;
+
+  /** Disposes of the watcher */
+  dispose(): void;
+}
+
+/**
  * Interface defining file system operations for the extension
  * Provides an abstraction over Node.js fs operations with added security, error handling, and caching
  */
@@ -211,4 +244,41 @@ export interface IFileSystemService extends vscode.Disposable {
     content: string,
     options?: { prefix?: string; suffix?: string }
   ): Promise<Result<string, Error>>;
+
+  /**
+   * Watch a single file for changes
+   * @param filePath Path to the file to watch
+   * @param listener Function called when file changes
+   * @returns FileWatcher that can be disposed
+   */
+  watchFile(
+    filePath: string,
+    listener: (event: FileWatcherEvent) => void
+  ): Result<FileWatcher, Error>;
+
+  /**
+   * Watch a directory for changes
+   * @param dirPath Path to the directory
+   * @param listener Function called when files change
+   * @param options Additional watcher options
+   * @returns FileWatcher that can be disposed
+   */
+  watchDirectory(
+    dirPath: string,
+    listener: (event: FileWatcherEvent, filePath: string) => void,
+    options?: FileWatcherOptions
+  ): Result<FileWatcher, Error>;
+
+  /**
+   * Watch multiple paths (files or directories)
+   * @param paths Array of paths to watch
+   * @param listener Function called when any file changes
+   * @param options Additional watcher options
+   * @returns FileWatcher that can be disposed
+   */
+  watchPaths(
+    paths: string[],
+    listener: (event: FileWatcherEvent, filePath: string) => void,
+    options?: FileWatcherOptions
+  ): Result<FileWatcher, Error>;
 }
