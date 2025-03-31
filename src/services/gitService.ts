@@ -8,6 +8,7 @@ import { IWorkspaceProvider } from "./interfaces/IWorkspaceProvider";
 import { IFileSystemService } from "./interfaces/IFileSystemService";
 import { promisify } from "util";
 import { failure, Result, success } from "../utils/results";
+import { TempFileHandle } from "./interfaces/ITempFileHandles";
 
 // Cache interface for storing git operation results
 interface GitCache {
@@ -404,19 +405,77 @@ export class GitService {
     filePath: string
   ): Promise<Result<string, Error>> {
     try {
+      const scriptContent = `#!/bin/bash
+# Commit-tracker push script
+echo "=== Commit Tracker Automatic Push ==="
+echo "Repository: ${repoPath}"
+
+# Change to the repository directory
+cd "${repoPath}"
+
+# Stage the file
+echo "Adding file: ${filePath}"
+git add "${filePath}"
+
+# Commit changes if needed
+if git status --porcelain | grep -q .; then
+  echo "Changes detected, committing..."
+  git commit -m "Update commit log - $(date -Iseconds)"
+  echo "Commit successful"
+else
+  echo "No changes to commit"
+  sleep 2 # Give user time to see the message
+  exit 0
+fi
+
+# Check if remote exists
+if git remote | grep -q origin; then
+  echo "Remote 'origin' exists"
+  
+  # Get current branch
+  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+  echo "Current branch: $CURRENT_BRANCH"
+  
+  # Push changes
+  echo "Pushing changes to origin/$CURRENT_BRANCH..."
+  git push
+  
+  # Check if push succeeded
+  if [ $? -eq 0 ]; then
+    echo "Push successful!"
+  else
+    echo "Push failed with status code $?"
+    echo "You may need to push manually or set up credentials"
+  fi
+else
+  echo "No remote 'origin' configured, skipping push"
+fi
+
+echo "=== Commit Tracker Push Complete ==="
+echo "Terminal will close in 3 seconds..."
+sleep 3
+`;
+
+      // Use the new safe temp file handling
+      const scriptResult =
+        await this.fileSystemService.createTempFileWithCleanup(scriptContent, {
+          prefix: "commit-tracker-push-",
+          suffix: ".sh",
+          mode: 0o755, // Make the script executable
+        });
+
+      if (scriptResult.isFailure()) {
+        return failure(scriptResult.error);
+      }
+
       this.logService?.info(
-        `Creating push script for: ${filePath} in ${repoPath}`
+        `Created temporary push script at ${scriptResult.value.path}`
       );
 
-      // Create push script with default options
-      return this.createAdvancedPushScript(repoPath, filePath, {
-        commitMessage: `Update commit log - ${new Date().toISOString()}`,
-        showOutput: true,
-        autoClose: true,
-        timeout: 3,
-      });
+      // Return just the path for backward compatibility
+      return success(scriptResult.value.path);
     } catch (error) {
-      this.logService?.error(`Error creating push script: ${error}`);
+      this.logService?.error(`Failed to create push script`, error);
       return failure(error instanceof Error ? error : new Error(String(error)));
     }
   }
@@ -935,13 +994,6 @@ sleep 3
     }
   }
 
-  /**
-   * Creates a push script with specific options
-   * @param repoPath Path to the repository
-   * @param filePath Path to the file being committed
-   * @param options Additional options for the script
-   * @returns Path to the created script
-   */
   public async createAdvancedPushScript(
     repoPath: string,
     filePath: string,
@@ -952,92 +1004,177 @@ sleep 3
       timeout?: number;
     } = {}
   ): Promise<Result<string, Error>> {
-    // Default options
-    const defaults = {
-      commitMessage: `Update commit log - ${new Date().toISOString()}`,
-      showOutput: true,
-      autoClose: true,
-      timeout: 5,
-    };
+    try {
+      const commitMessage =
+        options.commitMessage ||
+        `Update commit log - ${new Date().toISOString()}`;
+      const showOutput = options.showOutput !== false;
+      const autoClose = options.autoClose !== false;
+      const timeout = options.timeout || 60;
 
-    const settings = { ...defaults, ...options };
-
-    // Build a more customizable script
-    const scriptContent = `#!/bin/bash
-# Commit Tracker Push Script
-echo "=== Commit Tracker Automatic Push ==="
-echo "Repository: ${repoPath}"
-echo "File: ${filePath}"
-
-# Change to the repository directory
-cd "${repoPath}" || { echo "Failed to change to repository directory"; exit 1; }
-
-# Stage the file
-echo "Adding file: ${filePath}"
-git add "${filePath}"
-
-# Commit changes if needed
-if git status --porcelain | grep -q .; then
-  echo "Changes detected, committing..."
-  git commit -m "${settings.commitMessage}"
-  if [ $? -eq 0 ]; then
+      const scriptContent = `#!/bin/bash
+  # Commit-tracker advanced push script
+  echo "=== Commit Tracker Push Operation ==="
+  echo "Repository: ${repoPath}"
+  echo "File: ${filePath}"
+  echo "Timeout: ${timeout} seconds"
+  
+  # Change to the repository directory
+  cd "${repoPath}" || { echo "Failed to change to repository directory"; exit 1; }
+  
+  # Stage the file
+  echo "Adding file: ${filePath}"
+  git add "${filePath}"
+  
+  # Commit changes if needed
+  if git status --porcelain | grep -q .; then
+    echo "Changes detected, committing..."
+    git commit -m "${commitMessage}"
+    if [ $? -ne 0 ]; then
+      echo "Commit failed"
+      exit 1
+    fi
     echo "Commit successful"
   else
-    echo "Commit failed"
-    exit 1
+    echo "No changes to commit"
+    exit 0
   fi
-else
-  echo "No changes to commit"
-  sleep 2
-  ${settings.autoClose ? "exit 0" : ""}
-fi
-
-# Check if remote exists
-if git remote | grep -q origin; then
-  echo "Remote 'origin' exists"
   
-  # Get current branch
-  CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  echo "Current branch: $CURRENT_BRANCH"
+  # Push with timeout handling
+  echo "Pushing changes..."
+  ( git push ) & 
+  PID=$!
   
-  # Push changes
-  echo "Pushing changes to origin/$CURRENT_BRANCH..."
-  git push
+  # Wait for the process to complete with timeout
+  COUNTER=0
+  while kill -0 $PID 2>/dev/null; do
+    if [ $COUNTER -ge ${timeout} ]; then
+      echo "Push operation timed out after ${timeout} seconds"
+      kill $PID 2>/dev/null
+      exit 1
+    fi
+    sleep 1
+    COUNTER=$((COUNTER+1))
+  done
   
-  if [ $? -eq 0 ]; then
+  # Check if push succeeded
+  wait $PID
+  EXIT_CODE=$?
+  
+  if [ $EXIT_CODE -eq 0 ]; then
     echo "Push successful!"
   else
-    echo "Push failed. You may need to push manually."
+    echo "Push failed with status code $EXIT_CODE"
+    echo "You may need to push manually or set up credentials"
   fi
-else
-  echo "No remote 'origin' configured, skipping push"
-fi
+  
+  ${
+    autoClose
+      ? 'echo "Terminal will close in 3 seconds..."; sleep 3'
+      : 'echo "Press any key to close this terminal"; read -n 1'
+  }
+  `;
 
-echo "=== Commit Tracker Push Complete ==="
-${
-  settings.autoClose
-    ? 'echo "Terminal will close in ${settings.timeout} seconds..."; sleep ${settings.timeout}'
-    : 'echo "Terminal will remain open"'
-}
-`;
+      // Use the new safe temp file handling
+      const scriptResult =
+        await this.fileSystemService.createTempFileWithCleanup(scriptContent, {
+          prefix: "commit-tracker-adv-push-",
+          suffix: ".sh",
+          mode: 0o755, // Make the script executable
+        });
 
-    // Use FileSystemService to create the script file
-    const scriptPath = path.join(os.tmpdir(), `git-push-${Date.now()}.sh`);
+      if (scriptResult.isFailure()) {
+        return failure(scriptResult.error);
+      }
 
-    const writeResult = await this.fileSystemService.writeFile(
-      scriptPath,
-      scriptContent,
-      { mode: 0o755 } // Make script executable
-    );
-
-    if (writeResult.isFailure()) {
-      this.logService?.error(
-        `Failed to create push script: ${writeResult.error}`
+      this.logService?.info(
+        `Created temporary advanced push script at ${scriptResult.value.path}`
       );
-      return failure(writeResult.error);
-    }
 
-    this.logService?.info(`Created push script at: ${scriptPath}`);
-    return success(scriptPath);
+      // Return just the path for backward compatibility
+      return success(scriptResult.value.path);
+    } catch (error) {
+      this.logService?.error(`Failed to create advanced push script`, error);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  public async createGitOperationScript(
+    repoPath: string,
+    operation: string,
+    options?: {
+      prefix?: string;
+      timeout?: number;
+      autoClose?: boolean;
+    }
+  ): Promise<Result<TempFileHandle, Error>> {
+    try {
+      const prefix = options?.prefix || "git-operation-";
+      const timeout = options?.timeout || 30;
+      const autoClose = options?.autoClose !== false;
+
+      const scriptContent = `#!/bin/bash
+  # Git operation script (${operation})
+  echo "=== Commit Tracker Git Operation ==="
+  echo "Repository: ${repoPath}"
+  echo "Operation: ${operation}"
+  echo "Started: $(date)"
+  
+  # Change to repository directory
+  cd "${repoPath}" || { 
+    echo "Error: Failed to change to repository directory"
+    exit 1
+  }
+  
+  # Execute the git operation with timeout
+  echo "Executing: git ${operation}"
+  ( git ${operation} ) &
+  PID=$!
+  
+  # Wait for the process to complete with timeout
+  COUNTER=0
+  while kill -0 $PID 2>/dev/null; do
+    if [ $COUNTER -ge ${timeout} ]; then
+      echo "Operation timed out after ${timeout} seconds"
+      kill $PID 2>/dev/null
+      exit 1
+    fi
+    sleep 1
+    COUNTER=$((COUNTER+1))
+  done
+  
+  # Check if operation succeeded
+  wait $PID
+  EXIT_CODE=$?
+  
+  if [ $EXIT_CODE -eq 0 ]; then
+    echo "Operation completed successfully"
+  else
+    echo "Operation failed with status code $EXIT_CODE"
+  fi
+  
+  echo "Current repository status:"
+  git status --short
+  
+  ${
+    autoClose
+      ? 'echo "Terminal will close in 3 seconds..."; sleep 3'
+      : 'echo "Press any key to close this terminal"; read -n 1'
+  }
+  `;
+
+      // Use the safe temp file creation method that supports cleanup
+      return await this.fileSystemService.createTempFileWithCleanup(
+        scriptContent,
+        {
+          prefix,
+          suffix: ".sh",
+          mode: 0o755,
+        }
+      );
+    } catch (error) {
+      this.logService?.error(`Failed to create git operation script`, error);
+      return failure(error instanceof Error ? error : new Error(String(error)));
+    }
   }
 }
