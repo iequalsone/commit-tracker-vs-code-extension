@@ -1,544 +1,523 @@
 import * as vscode from "vscode";
 import {
   INotificationService,
-  NotificationLevel,
-  NotificationOptions,
-  NotificationRecord,
+  NotificationHistoryItem,
+  NotificationPriority,
+  NotificationPersistence,
+  ProgressOptions,
+  NotificationCallback,
 } from "./interfaces/INotificationService";
 import { ILogService } from "./interfaces/ILogService";
 
 /**
- * Default implementation of the NotificationService
- * Handles displaying notifications with throttling, grouping, and history tracking
+ * Default implementation of NotificationService
  */
 export class NotificationService implements INotificationService {
   private readonly logService?: ILogService;
-  private notificationHistory: NotificationRecord[] = [];
-  private maxHistorySize: number = 100;
-
-  // Throttling data
-  private throttleMap = new Map<
+  private history: NotificationHistoryItem[] = [];
+  private throttleMap: Map<string, number> = new Map();
+  private groupedNotifications: Map<
     string,
-    {
-      lastShown: number;
-      count: number;
-      timeoutHandle?: NodeJS.Timeout;
-    }
-  >();
-
-  // Notification grouping data
-  private groupedNotifications = new Map<
+    { count: number; lastShown: number }
+  > = new Map();
+  private throttleDurationMs: number = 5000; // 5 seconds default
+  private groupingEnabled: boolean = true;
+  private activeProgressReporters: Map<
     string,
-    {
-      messages: string[];
-      level: NotificationLevel;
-      groupTimeoutHandle?: NodeJS.Timeout;
-    }
-  >();
+    vscode.Progress<{ message?: string; increment?: number }>
+  > = new Map();
 
   /**
-   * Creates a new NotificationService
-   * @param logService Optional log service for logging notification events
+   * Create a new NotificationService
+   * @param logService Optional log service for logging
    */
   constructor(logService?: ILogService) {
     this.logService = logService;
-
     if (this.logService) {
       this.logService.info("NotificationService initialized");
     }
   }
 
   /**
-   * Shows an information notification
-   * @param message The notification message
-   * @param options Additional notification options
-   * @returns Promise that resolves to the selected item or undefined
+   * Shows an information message
+   * @param message Message to display
+   * @param options Additional options
+   * @param actions Available actions
+   * @returns Promise resolving to selected action if any
    */
   public async info(
     message: string,
-    options?: NotificationOptions
+    options?: {
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
   ): Promise<string | undefined> {
-    if (this.logService) {
-      this.logService.info(`Notification (info): ${message}`);
-    }
-
-    // Check throttling
-    if (this.shouldThrottle("info", message, options)) {
-      return undefined;
-    }
-
-    // Check if this should be added to a group
-    if (this.shouldGroup(message, "info", options)) {
-      return undefined;
-    }
-
-    // Track in history
-    this.addToHistory({
-      message,
-      level: "info",
-      timestamp: new Date(),
-      options,
-    });
-
-    // Show the notification
-    const items = options?.actions || [];
-    const result = await vscode.window.showInformationMessage(
-      message,
-      { modal: options?.modal || false },
-      ...items
-    );
-
-    return result;
+    return this.showNotification("info", message, options, ...actions);
   }
 
   /**
-   * Shows a warning notification
-   * @param message The notification message
-   * @param options Additional notification options
-   * @returns Promise that resolves to the selected item or undefined
+   * Shows a warning message
+   * @param message Message to display
+   * @param options Additional options
+   * @param actions Available actions
+   * @returns Promise resolving to selected action if any
    */
-  public async warning(
+  public async warn(
     message: string,
-    options?: NotificationOptions
+    options?: {
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
   ): Promise<string | undefined> {
-    if (this.logService) {
-      this.logService.warn(`Notification (warning): ${message}`);
-    }
-
-    // Check throttling
-    if (this.shouldThrottle("warning", message, options)) {
-      return undefined;
-    }
-
-    // Check if this should be added to a group
-    if (this.shouldGroup(message, "warning", options)) {
-      return undefined;
-    }
-
-    // Track in history
-    this.addToHistory({
-      message,
-      level: "warning",
-      timestamp: new Date(),
-      options,
-    });
-
-    // Show the notification
-    const items = options?.actions || [];
-    const result = await vscode.window.showWarningMessage(
-      message,
-      { modal: options?.modal || false },
-      ...items
-    );
-
-    return result;
+    return this.showNotification("warning", message, options, ...actions);
   }
 
   /**
-   * Shows an error notification
-   * @param message The notification message
-   * @param options Additional notification options
-   * @returns Promise that resolves to the selected item or undefined
+   * Shows an error message
+   * @param message Message to display
+   * @param options Additional options
+   * @param actions Available actions
+   * @returns Promise resolving to selected action if any
    */
   public async error(
     message: string,
-    options?: NotificationOptions
+    options?: {
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
   ): Promise<string | undefined> {
-    if (this.logService) {
-      this.logService.error(`Notification (error): ${message}`);
-    }
-
-    // Check throttling
-    if (this.shouldThrottle("error", message, options)) {
-      return undefined;
-    }
-
-    // Check if this should be added to a group
-    if (this.shouldGroup(message, "error", options)) {
-      return undefined;
-    }
-
-    // Track in history
-    this.addToHistory({
-      message,
-      level: "error",
-      timestamp: new Date(),
-      options,
-    });
-
-    // Show the notification
-    const items = options?.actions || [];
-    const result = await vscode.window.showErrorMessage(
-      message,
-      { modal: options?.modal || false },
-      ...items
-    );
-
-    return result;
+    return this.showNotification("error", message, options, ...actions);
   }
 
   /**
-   * Shows a notification with a progress indicator for long-running operations
-   * @param title Title for the progress operation
-   * @param task Function that performs the long-running task
-   * @param options Additional notification options
-   * @returns Promise that resolves when the task completes
+   * Shows a notification with callback actions
+   * @param message Message to display
+   * @param type Type of notification
+   * @param callback Callback to execute when action is selected
+   * @param options Additional options
+   * @param actions Available actions
+   * @returns Promise resolving to selected action if any
    */
-  public async withProgress<T>(
-    title: string,
-    task: (
-      progress: vscode.Progress<{ message?: string; increment?: number }>
-    ) => Thenable<T>,
-    options?: NotificationOptions
-  ): Promise<T> {
-    if (this.logService) {
-      this.logService.info(`Progress notification: ${title}`);
+  public async showWithCallback(
+    message: string,
+    type: "info" | "warning" | "error",
+    callback: NotificationCallback,
+    options?: {
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
+  ): Promise<string | undefined> {
+    const selected = await this.showNotification(
+      type,
+      message,
+      options,
+      ...actions
+    );
+
+    if (selected) {
+      try {
+        await callback(selected);
+      } catch (error) {
+        this.logService?.error(`Error in notification callback: ${error}`);
+      }
+    } else if (options?.trackDismissal) {
+      // Handle dismissal
+      try {
+        await callback(undefined);
+      } catch (error) {
+        this.logService?.error(`Error in dismissal callback: ${error}`);
+      }
     }
 
-    // Track in history
-    this.addToHistory({
-      message: title,
-      level: "info",
-      timestamp: new Date(),
-      isProgress: true,
-      options,
-    });
+    return selected;
+  }
 
+  /**
+   * Shows a progress notification for a long-running operation
+   * @param title Title for the progress notification
+   * @param task The task function that receives a progress object
+   * @param options Additional options for the progress display
+   */
+  public withProgress<T>(
+    title: string,
+    task: (
+      progress: vscode.Progress<{ message?: string; increment?: number }>,
+      token: vscode.CancellationToken
+    ) => Thenable<T>,
+    options?: ProgressOptions
+  ): Thenable<T> {
+    const progressId = `progress-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 5)}`;
+
+    // Add to history before showing
+    const historyItem: NotificationHistoryItem = {
+      id: progressId,
+      message: title,
+      type: "progress",
+      timestamp: new Date(),
+      priority: options?.cancellable
+        ? NotificationPriority.HIGH
+        : NotificationPriority.NORMAL,
+    };
+
+    this.history.push(historyItem);
+    this.logService?.debug(`Starting progress notification: ${title}`);
+
+    // Configure progress options
     const progressOptions: vscode.ProgressOptions = {
-      location:
-        options?.progressLocation || vscode.ProgressLocation.Notification,
+      location: options?.location || vscode.ProgressLocation.Notification,
       title,
       cancellable: options?.cancellable || false,
     };
 
-    return vscode.window.withProgress(progressOptions, task);
+    // Create and show progress
+    return vscode.window.withProgress(
+      progressOptions,
+      async (progress, token) => {
+        // Store progress reporter for potential external updates
+        this.activeProgressReporters.set(progressId, progress);
+
+        // If initial value is provided
+        if (options?.initialValue !== undefined) {
+          progress.report({ increment: options.initialValue });
+        }
+
+        try {
+          // Execute the task
+          const result = await task(progress, token);
+          this.logService?.debug(`Progress task completed: ${title}`);
+          return result;
+        } finally {
+          // Clean up
+          this.activeProgressReporters.delete(progressId);
+        }
+      }
+    );
   }
 
   /**
-   * Shows a notification that requires user input
-   * @param message The message to show
-   * @param options Additional options for the input
-   * @returns Promise that resolves to the user input or undefined if canceled
+   * Private method to handle all notification display logic
    */
-  public async showInputRequest(
+  private async showNotification(
+    type: "info" | "warning" | "error",
     message: string,
     options?: {
-      placeHolder?: string;
-      prompt?: string;
-      value?: string;
-      password?: boolean;
-      validateInput?: (
-        value: string
-      ) => string | undefined | null | Thenable<string | undefined | null>;
-    }
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
   ): Promise<string | undefined> {
-    if (this.logService) {
-      this.logService.info(`Input request: ${message}`);
+    // Apply priority-based throttling
+    if (!this.shouldShowNotification(message, options?.priority)) {
+      this.logService?.debug(`Notification throttled: ${message}`);
+      return undefined;
     }
 
-    // Track in history
-    this.addToHistory({
+    // Handle notification grouping
+    const displayedMessage = this.getGroupedMessage(message);
+
+    // Format message with markdown if needed
+    const formattedMessage = options?.useMarkdown
+      ? this.formatMarkdownMessage(displayedMessage)
+      : displayedMessage;
+
+    // Create a unique ID for this notification
+    const id = `${type}-${Date.now()}-${Math.random()
+      .toString(36)
+      .substr(2, 5)}`;
+
+    // Add to history before showing
+    const historyItem: NotificationHistoryItem = {
+      id,
       message,
-      level: "info",
+      type,
       timestamp: new Date(),
-      isInput: true,
-    });
+      priority: options?.priority || NotificationPriority.NORMAL,
+      actions: actions.length > 0 ? [...actions] : undefined,
+    };
 
-    return vscode.window.showInputBox({
-      placeHolder: options?.placeHolder,
-      prompt: options?.prompt || message,
-      value: options?.value,
-      password: options?.password,
-      validateInput: options?.validateInput,
-    });
-  }
+    this.history.push(historyItem);
 
-  /**
-   * Gets the notification history
-   * @param limit Optional limit on the number of history items to return
-   * @returns Array of notification history records
-   */
-  public getHistory(limit?: number): NotificationRecord[] {
-    const historyToShow = limit
-      ? this.notificationHistory.slice(-limit)
-      : this.notificationHistory;
-    return [...historyToShow];
-  }
+    // Log notification
+    this.logService?.debug(`Showing ${type} notification: ${message}`);
 
-  /**
-   * Clears the notification history
-   */
-  public clearHistory(): void {
-    this.notificationHistory = [];
+    // Apply persistence settings
+    const isPersistent =
+      options?.persistence === NotificationPersistence.STICKY ||
+      options?.persistence === NotificationPersistence.UNTIL_DISMISSED;
 
-    if (this.logService) {
-      this.logService.info("Notification history cleared");
-    }
-  }
+    // Show the notification
+    let selection: string | undefined;
 
-  /**
-   * Sets the maximum number of notifications to keep in history
-   * @param size The new maximum history size
-   */
-  public setMaxHistorySize(size: number): void {
-    this.maxHistorySize = size;
-
-    // Trim history if needed
-    if (this.notificationHistory.length > this.maxHistorySize) {
-      this.notificationHistory = this.notificationHistory.slice(
-        -this.maxHistorySize
+    if (type === "info") {
+      selection = await vscode.window.showInformationMessage(
+        formattedMessage,
+        {
+          modal: options?.modal === true,
+          detail: options?.detail,
+        },
+        ...actions
+      );
+    } else if (type === "warning") {
+      selection = await vscode.window.showWarningMessage(
+        formattedMessage,
+        {
+          modal: options?.modal === true,
+          detail: options?.detail,
+        },
+        ...actions
+      );
+    } else {
+      selection = await vscode.window.showErrorMessage(
+        formattedMessage,
+        {
+          modal: options?.modal === true,
+          detail: options?.detail,
+        },
+        ...actions
       );
     }
 
-    if (this.logService) {
-      this.logService.info(`Max notification history size set to ${size}`);
-    }
-  }
-
-  /**
-   * Shows a grouped notification for multiple similar notifications
-   * @param groupKey The key identifying this notification group
-   */
-  private async showGroupedNotification(groupKey: string): Promise<void> {
-    const groupData = this.groupedNotifications.get(groupKey);
-    if (!groupData) {
-      return;
-    }
-
-    // Clear the timeout if it exists
-    if (groupData.groupTimeoutHandle) {
-      clearTimeout(groupData.groupTimeoutHandle);
-    }
-
-    // Don't show empty groups
-    if (groupData.messages.length === 0) {
-      this.groupedNotifications.delete(groupKey);
-      return;
-    }
-
-    // Create a grouped message
-    let message = "";
-
-    if (groupData.messages.length === 1) {
-      message = groupData.messages[0];
-    } else {
-      message = `${groupData.messages.length} notifications: ${
-        groupData.messages[0]
-      } ${
-        groupData.messages.length > 1
-          ? `(+${groupData.messages.length - 1} more)`
-          : ""
-      }`;
-    }
-
-    // Show according to level
-    switch (groupData.level) {
-      case "info":
-        await vscode.window.showInformationMessage(message);
-        break;
-      case "warning":
-        await vscode.window.showWarningMessage(message);
-        break;
-      case "error":
-        await vscode.window.showErrorMessage(message);
-        break;
-    }
-
-    // Add to history as a grouped notification
-    this.addToHistory({
-      message,
-      level: groupData.level,
-      timestamp: new Date(),
-      groupSize: groupData.messages.length,
-      isGrouped: true,
-    });
-
-    // Clear the group
-    this.groupedNotifications.delete(groupKey);
-  }
-
-  /**
-   * Determines if a notification should be added to a group
-   * @param message The notification message
-   * @param level The notification level
-   * @param options Notification options
-   * @returns True if the notification was grouped (and shouldn't be shown individually)
-   */
-  private shouldGroup(
-    message: string,
-    level: NotificationLevel,
-    options?: NotificationOptions
-  ): boolean {
-    // If grouping is disabled or this is a modal, don't group
-    if (options?.groupKey === false || options?.modal) {
-      return false;
-    }
-
-    // Get or create the group key
-    const groupKey = options?.groupKey || level;
-
-    // If we have an existing group
-    if (this.groupedNotifications.has(groupKey)) {
-      const groupData = this.groupedNotifications.get(groupKey)!;
-
-      // Add this message to the group
-      groupData.messages.push(message);
-
-      // Use the highest severity level in the group
-      if (level === "error") {
-        groupData.level = "error";
-      } else if (level === "warning" && groupData.level === "info") {
-        groupData.level = "warning";
+    // Update history with the action selected or dismissal
+    const historyIndex = this.history.findIndex((item) => item.id === id);
+    if (historyIndex >= 0) {
+      if (selection) {
+        this.history[historyIndex].actionSelected = selection;
+        this.logService?.debug(`Action selected: ${selection}`);
+      } else if (options?.trackDismissal) {
+        this.history[historyIndex].dismissed = true;
+        this.history[historyIndex].dismissedAt = new Date();
+        this.logService?.debug(`Notification dismissed: ${id}`);
       }
-
-      // If this is the first addition, set a timeout to show the group
-      if (groupData.messages.length === 1) {
-        const timeout = options?.groupDelay || 1000;
-        groupData.groupTimeoutHandle = setTimeout(() => {
-          this.showGroupedNotification(groupKey);
-        }, timeout);
-      }
-
-      return true;
     }
 
-    // No existing group, so create one if we're supposed to group
-    if (options?.grouping !== false) {
-      const timeout = options?.groupDelay || 1000;
-
-      this.groupedNotifications.set(groupKey, {
-        messages: [message],
-        level,
-        groupTimeoutHandle: setTimeout(() => {
-          this.showGroupedNotification(groupKey);
-        }, timeout),
-      });
-
-      return true;
-    }
-
-    return false;
+    return selection;
   }
 
   /**
-   * Determines if a notification should be throttled
-   * @param level The notification level
-   * @param message The notification message
-   * @param options Notification options
-   * @returns True if the notification should be throttled (not shown)
+   * Formats a message with markdown support
+   * @param message Message to format
+   * @returns Formatted message
    */
-  private shouldThrottle(
-    level: NotificationLevel,
-    message: string,
-    options?: NotificationOptions
-  ): boolean {
-    // If throttling is disabled or this is a modal, don't throttle
-    if (options?.throttle === false || options?.modal) {
-      return false;
-    }
+  private formatMarkdownMessage(message: string): string {
+    // VS Code notifications support a subset of markdown
+    // We'll ensure only supported elements are used
 
-    const throttleKey = options?.throttleKey || message;
+    // Replace unsupported markdown with supported alternatives
+    let formatted = message
+      // Replace heading levels (## becomes **bold**)
+      .replace(/^(#{1,3})\s+(.+)$/gm, (_, hashes, content) => `**${content}**`)
+      // Ensure links are properly formatted
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "[$1]($2)");
+
+    return formatted;
+  }
+
+  /**
+   * Determines if a notification should be shown based on throttling rules
+   * @param message The notification message
+   * @param priority The notification priority
+   * @returns True if notification should be shown
+   */
+  private shouldShowNotification(
+    message: string,
+    priority?: NotificationPriority
+  ): boolean {
     const now = Date.now();
-    const throttleData = this.throttleMap.get(throttleKey);
-    const throttlePeriod = options?.throttlePeriod || 5000; // Default 5s
+    const key = this.normalizeMessageForThrottling(message);
 
-    // If we have throttle data and we're within the threshold
-    if (throttleData && now - throttleData.lastShown < throttlePeriod) {
-      // Increment the counter
-      throttleData.count++;
-
-      // If we have a pending timeout, clear it and set a new one
-      if (throttleData.timeoutHandle) {
-        clearTimeout(throttleData.timeoutHandle);
-      }
-
-      // Set a timeout to show a summary message
-      throttleData.timeoutHandle = setTimeout(() => {
-        if (throttleData.count > 1) {
-          // Show a summary message
-          const summaryMessage = `${message} (${throttleData.count} occurrences)`;
-
-          switch (level) {
-            case "info":
-              vscode.window.showInformationMessage(summaryMessage);
-              break;
-            case "warning":
-              vscode.window.showWarningMessage(summaryMessage);
-              break;
-            case "error":
-              vscode.window.showErrorMessage(summaryMessage);
-              break;
-          }
-
-          // Add to history as a throttled notification
-          this.addToHistory({
-            message: summaryMessage,
-            level,
-            timestamp: new Date(),
-            isThrottled: true,
-            count: throttleData.count,
-          });
-        }
-
-        // Reset throttle data
-        this.throttleMap.delete(throttleKey);
-      }, throttlePeriod);
-
+    // High priority and urgent notifications bypass throttling
+    if (
+      priority === NotificationPriority.HIGH ||
+      priority === NotificationPriority.URGENT
+    ) {
       return true;
     }
 
-    // No throttling needed, but track this notification for future throttling
-    this.throttleMap.set(throttleKey, {
-      lastShown: now,
-      count: 1,
-    });
+    // Check if this notification is currently throttled
+    const lastShownTime = this.throttleMap.get(key);
+    if (lastShownTime && now - lastShownTime < this.throttleDurationMs) {
+      return false;
+    }
 
-    return false;
+    // Update the last shown time for this notification
+    this.throttleMap.set(key, now);
+    return true;
   }
 
   /**
-   * Adds a notification record to history
-   * @param record The notification record to add
+   * Normalizes a message for throttling comparison
+   * @param message The message to normalize
+   * @returns Normalized message key
    */
-  private addToHistory(record: NotificationRecord): void {
-    this.notificationHistory.push(record);
+  private normalizeMessageForThrottling(message: string): string {
+    // Remove whitespace, make lowercase
+    return message.trim().toLowerCase().replace(/\s+/g, " ");
+  }
 
-    // Maintain history size
-    if (this.notificationHistory.length > this.maxHistorySize) {
-      this.notificationHistory.shift();
+  /**
+   * Gets a potentially grouped message
+   * @param message The original message
+   * @returns The message, potentially modified for grouping
+   */
+  private getGroupedMessage(message: string): string {
+    if (!this.groupingEnabled) {
+      return message;
+    }
+
+    const now = Date.now();
+    const key = this.normalizeMessageForThrottling(message);
+    const groupInfo = this.groupedNotifications.get(key);
+
+    if (!groupInfo) {
+      // First occurrence of this message
+      this.groupedNotifications.set(key, { count: 1, lastShown: now });
+      return message;
+    }
+
+    // Check if we're within the grouping window
+    if (now - groupInfo.lastShown < 30000) {
+      // 30 seconds grouping window
+      // Update the group info
+      groupInfo.count++;
+      groupInfo.lastShown = now;
+      this.groupedNotifications.set(key, groupInfo);
+
+      // Return grouped message
+      return `${message} (${groupInfo.count}x)`;
+    } else {
+      // Reset the counter if outside grouping window
+      this.groupedNotifications.set(key, { count: 1, lastShown: now });
+      return message;
     }
   }
 
   /**
-   * Returns a promise that resolves after the specified timeout
-   * @param ms Milliseconds to wait
+   * Get notification history
+   * @param limit Maximum number of items to return (0 for all)
+   * @param includeAll Whether to include all notifications or only important ones
+   * @returns Array of notification history items
    */
-  public async sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  public getHistory(
+    limit: number = 0,
+    includeAll: boolean = true
+  ): NotificationHistoryItem[] {
+    let filteredHistory = this.history;
+
+    if (!includeAll) {
+      // Only include important notifications (high/urgent priority or with actions)
+      filteredHistory = this.history.filter(
+        (item) =>
+          item.priority === NotificationPriority.HIGH ||
+          item.priority === NotificationPriority.URGENT ||
+          (item.actions && item.actions.length > 0)
+      );
+    }
+
+    // Sort by most recent first
+    const sortedHistory = [...filteredHistory].sort(
+      (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
+    );
+
+    // Apply limit if provided
+    return limit > 0 ? sortedHistory.slice(0, limit) : sortedHistory;
   }
 
   /**
-   * Disposes of any resources used by the service
+   * Get notification dismissal statistics
+   * @returns Object with dismissal stats
+   */
+  public getDismissalStats(): {
+    total: number;
+    dismissed: number;
+    actioned: number;
+    dismissalRate: number;
+  } {
+    const trackableNotifications = this.history.filter(
+      (item) => item.type !== "progress"
+    );
+    const total = trackableNotifications.length;
+    const dismissed = trackableNotifications.filter(
+      (item) => item.dismissed
+    ).length;
+    const actioned = trackableNotifications.filter(
+      (item) => item.actionSelected
+    ).length;
+
+    return {
+      total,
+      dismissed,
+      actioned,
+      dismissalRate: total > 0 ? dismissed / total : 0,
+    };
+  }
+
+  /**
+   * Clear notification history
+   */
+  public clearHistory(): void {
+    this.history = [];
+    this.logService?.info("Notification history cleared");
+  }
+
+  /**
+   * Set throttling duration for notifications
+   * @param durationMs Duration in milliseconds
+   */
+  public setThrottleDuration(durationMs: number): void {
+    this.throttleDurationMs = durationMs;
+    this.logService?.info(`Notification throttling set to ${durationMs}ms`);
+  }
+
+  /**
+   * Enable or disable notification grouping
+   * @param enabled Whether to enable grouping
+   */
+  public enableGrouping(enabled: boolean): void {
+    this.groupingEnabled = enabled;
+    this.logService?.info(
+      `Notification grouping ${enabled ? "enabled" : "disabled"}`
+    );
+
+    // Clear grouped notifications when disabling
+    if (!enabled) {
+      this.groupedNotifications.clear();
+    }
+  }
+
+  /**
+   * Clean up resources when disposing
    */
   public dispose(): void {
-    // Clear all timeouts
-    for (const data of this.throttleMap.values()) {
-      if (data.timeoutHandle) {
-        clearTimeout(data.timeoutHandle);
-      }
-    }
-
-    for (const data of this.groupedNotifications.values()) {
-      if (data.groupTimeoutHandle) {
-        clearTimeout(data.groupTimeoutHandle);
-      }
-    }
-
+    // Clear all maps and collections
     this.throttleMap.clear();
     this.groupedNotifications.clear();
-
-    if (this.logService) {
-      this.logService.info("NotificationService disposed");
-    }
+    this.activeProgressReporters.clear();
+    this.logService?.debug("NotificationService disposed");
   }
 }
