@@ -870,7 +870,7 @@ sleep 5
   }
 
   /**
-   * Creates a terminal to execute Git operations
+   * Creates a terminal to execute Git operations safely
    * @param workingDirectory The directory to execute commands in
    * @param scriptContent The script content to execute
    * @param terminalName Optional custom terminal name
@@ -887,27 +887,27 @@ sleep 5
 
     if (!this.fileSystemService) {
       this.logService.error("FileSystemService not available");
-      vscode.window.showErrorMessage(
-        "Unable to create terminal: File system service not available"
-      );
       return undefined;
     }
 
     try {
-      // Create a temporary script file using FileSystemService
-      const scriptResult = await this.fileSystemService.createExecutableScript(
-        scriptContent,
-        { prefix: "commit-tracker-", suffix: ".sh" }
-      );
+      // Use the new safe temp file handling
+      const scriptResult =
+        await this.fileSystemService.createTempFileWithCleanup(scriptContent, {
+          prefix: "commit-tracker-terminal-",
+          suffix: ".sh",
+        });
 
       if (scriptResult.isFailure()) {
-        throw scriptResult.error;
+        this.logService.error(
+          `Failed to create temporary script: ${scriptResult.error}`
+        );
+        return undefined;
       }
 
-      const scriptPath = scriptResult.value;
-      this.logService.info(`Created script at: ${scriptPath}`);
+      const scriptPath = scriptResult.value.path;
 
-      // Create terminal and execute the script
+      // Create terminal
       const terminal = vscode.window.createTerminal({
         name: terminalName,
         cwd: workingDirectory,
@@ -916,26 +916,11 @@ sleep 5
       terminal.show();
       terminal.sendText(`bash "${scriptPath}" && exit || exit`);
 
-      // Clean up script after a delay
-      setTimeout(async () => {
-        try {
-          const deleteResult = await this.fileSystemService!.deleteFile(
-            scriptPath
-          );
-          if (deleteResult.isFailure()) {
-            this.logService.warn(
-              `Failed to delete temporary script: ${deleteResult.error.message}`
-            );
-          }
-        } catch (error) {
-          this.logService.warn(`Error deleting temporary script: ${error}`);
-        }
-      }, 10000);
+      // The script file will be cleaned up automatically when the process exits
 
       return terminal;
     } catch (error) {
       this.logService.error(`Error creating Git operation terminal: ${error}`);
-      vscode.window.showErrorMessage(`Failed to create terminal: ${error}`);
       return undefined;
     }
   }
