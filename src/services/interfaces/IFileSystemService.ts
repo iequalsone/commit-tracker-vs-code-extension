@@ -19,6 +19,7 @@ export interface FileWatcherOptions {
 
   /** Exclude patterns (glob patterns) */
   exclude?: string[];
+  excludePatterns?: RegExp[];
 
   /** Throttle events (in ms) to prevent excessive notifications */
   throttleMs?: number;
