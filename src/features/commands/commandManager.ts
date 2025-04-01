@@ -11,7 +11,11 @@ import {
 } from "../repository/repositoryManager";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
-import { INotificationService } from "../../services/interfaces/INotificationService";
+import {
+  INotificationService,
+  NotificationPersistence,
+  NotificationPriority,
+} from "../../services/interfaces/INotificationService";
 
 /**
  * Manages all extension commands and their registration
@@ -108,12 +112,20 @@ export class CommandManager implements vscode.Disposable {
 
         // Show error in notification based on error type
         if (operation === "git" || operation === "push") {
-          vscode.window.showErrorMessage(`Git operation failed: ${error}`);
+          this.showNotification("error", `Git operation failed: ${error}`, {
+            priority: NotificationPriority.HIGH,
+          });
         } else if (operation === "fileSystem") {
-          vscode.window.showErrorMessage(`File operation failed: ${error}`);
+          this.showNotification("error", `File operation failed: ${error}`, {
+            priority: NotificationPriority.HIGH,
+          });
         } else {
-          vscode.window.showErrorMessage(
-            `Repository operation failed: ${error}`
+          this.showNotification(
+            "error",
+            `Repository operation failed: ${error}`,
+            {
+              priority: NotificationPriority.HIGH,
+            }
           );
         }
       });
@@ -234,7 +246,9 @@ export class CommandManager implements vscode.Disposable {
       this.logService.info("=== CACHE STATUS ===");
 
       if (!this.repositoryManager) {
-        vscode.window.showErrorMessage("Repository manager not initialized");
+        this.showNotification("error", "Repository manager not initialized", {
+          priority: NotificationPriority.HIGH,
+        });
         return;
       }
 
@@ -244,8 +258,13 @@ export class CommandManager implements vscode.Disposable {
         this.logService.error(
           `Failed to get cache status: ${cacheStatus.error.message}`
         );
-        vscode.window.showErrorMessage(
-          `Failed to get cache status: ${cacheStatus.error.message}`
+
+        this.showNotification(
+          "error",
+          `Failed to get cache status: ${cacheStatus.error.message}`,
+          {
+            priority: NotificationPriority.HIGH,
+          }
         );
         return;
       }
@@ -280,7 +299,7 @@ export class CommandManager implements vscode.Disposable {
       );
 
       // Ask user if they want to clear cache
-      const action = await vscode.window.showQuickPick(
+      const action = await this.showQuickPick(
         [
           "View Cache Status Only",
           "Clear Repository Status Cache",
@@ -299,34 +318,32 @@ export class CommandManager implements vscode.Disposable {
       switch (action) {
         case "Clear Repository Status Cache":
           this.repositoryManager.invalidateCache("repositoryStatus");
-          vscode.window.showInformationMessage(
-            "Repository status cache cleared"
-          );
+          this.showNotification("info", "Repository status cache cleared");
           break;
         case "Clear Commit History Cache":
           this.repositoryManager.invalidateCache("commitHistory");
-          vscode.window.showInformationMessage("Commit history cache cleared");
+          this.showNotification("info", "Commit history cache cleared");
           break;
         case "Clear Statistics Cache":
           this.repositoryManager.invalidateCache("statistics");
-          vscode.window.showInformationMessage("Statistics cache cleared");
+          this.showNotification("info", "Statistics cache cleared");
           break;
         case "Clear Unpushed Commits Cache":
           this.repositoryManager.invalidateCache("unpushedCommits");
-          vscode.window.showInformationMessage(
-            "Unpushed commits cache cleared"
-          );
+          this.showNotification("info", "Unpushed commits cache cleared");
           break;
         case "Clear All Caches":
           this.repositoryManager.invalidateCache();
-          vscode.window.showInformationMessage("All caches cleared");
+          this.showNotification("info", "All caches cleared");
           break;
       }
 
       this.logService.info("=== END CACHE STATUS ===");
     } catch (error) {
       this.logService.error(`Error managing cache: ${error}`);
-      vscode.window.showErrorMessage(`Error managing cache: ${error}`);
+      this.showNotification("error", `Error managing cache: ${error}`, {
+        priority: NotificationPriority.NORMAL,
+      });
     }
   }
 
@@ -340,13 +357,13 @@ export class CommandManager implements vscode.Disposable {
       const hasUnpushedCommits = await this.gitService.hasUnpushedCommits();
 
       if (hasUnpushedCommits) {
-        vscode.window.showInformationMessage("You have unpushed commits");
+        this.showNotification("info", "You have unpushed commits");
       } else {
-        vscode.window.showInformationMessage("All commits are pushed");
+        this.showNotification("info", "All commits are pushed");
       }
     } catch (error) {
       this.logService.error("Error showing commit details", error);
-      vscode.window.showErrorMessage("Failed to show commit details");
+      this.showNotification("error", "Failed to show commit details");
     }
   }
 
@@ -385,7 +402,8 @@ export class CommandManager implements vscode.Disposable {
           "Commit Tracker setup completed successfully!"
         );
       } else {
-        vscode.window.showInformationMessage(
+        this.showNotification(
+          "info",
           "Commit Tracker setup completed successfully!"
         );
       }
@@ -401,11 +419,13 @@ export class CommandManager implements vscode.Disposable {
     // Replace direct vscode call with notificationService
     if (this.notificationService) {
       this.notificationService.info(
-        "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
+        "Commit Tracker setup has been reset. Run the setup wizard to configure.",
+        { priority: NotificationPriority.NORMAL }
       );
     } else {
-      vscode.window.showInformationMessage(
-        "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
+      this.showNotification(
+        "info",
+        "Commit Tracker setup has been reset. Run the setup wizard to configure."
       );
     }
 
@@ -435,7 +455,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.error("Git extension not found");
         } else {
-          vscode.window.showErrorMessage("Git extension not found");
+          this.showNotification("error", "Git extension not found");
         }
         this.statusManager.setErrorStatus("Git Not Found");
         return;
@@ -446,7 +466,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.error("Git API not available");
         } else {
-          vscode.window.showErrorMessage("Git API not available");
+          this.showNotification("error", "Git API not available");
         }
         this.statusManager.setErrorStatus("Git API Error");
         return;
@@ -457,7 +477,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.warn("No repository found");
         } else {
-          vscode.window.showWarningMessage("No repository found");
+          this.showNotification("warning", "No repository found");
         }
         this.statusManager.setErrorStatus("No Repository");
         return;
@@ -468,32 +488,17 @@ export class CommandManager implements vscode.Disposable {
       );
 
       if (result.isSuccess()) {
-        const commit = result.value;
-        this.statusManager.showCommitProcessedStatus(
-          commit.repoName,
-          commit.hash.substring(0, 7)
-        );
         if (this.notificationService) {
           this.notificationService.info(
-            `Commit logged: ${commit.hash.substring(0, 7)}`,
-            {
-              detail: commit.message,
-            }
-          );
-        } else {
-          vscode.window.showInformationMessage(
-            `Commit logged: ${commit.hash.substring(0, 7)}`
+            `Successfully logged commit: ${result.value.hash.substring(0, 7)}`,
+            { priority: NotificationPriority.NORMAL }
           );
         }
       } else {
-        this.statusManager.showCommitFailedStatus(result.error);
         if (this.notificationService) {
-          this.notificationService.error("Failed to log commit", {
-            detail: result.error.message,
-          });
-        } else {
-          vscode.window.showErrorMessage(
-            `Failed to log commit: ${result.error.message}`
+          this.notificationService.error(
+            `Failed to log commit: ${result.error.message}`,
+            { priority: NotificationPriority.HIGH }
           );
         }
       }
@@ -502,11 +507,14 @@ export class CommandManager implements vscode.Disposable {
         error instanceof Error ? error : new Error(String(error))
       );
       if (this.notificationService) {
-        this.notificationService.error("Error logging commit", {
-          detail: String(error),
-        });
+        this.notificationService.error(
+          `Error logging commit: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { priority: NotificationPriority.HIGH }
+        );
       } else {
-        vscode.window.showErrorMessage(`Error logging commit: ${error}`);
+        this.showNotification("error", `Error logging commit: ${error}`);
       }
     }
   }
@@ -521,7 +529,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.info("Commit monitoring started");
         } else {
-          vscode.window.showInformationMessage("Commit monitoring started");
+          this.showNotification("info", "Commit monitoring started");
         }
       } else {
         if (this.notificationService) {
@@ -529,7 +537,8 @@ export class CommandManager implements vscode.Disposable {
             detail: initResult.error.message,
           });
         } else {
-          vscode.window.showErrorMessage(
+          this.showNotification(
+            "error",
             `Failed to start commit monitoring: ${initResult.error.message}`
           );
         }
@@ -538,7 +547,7 @@ export class CommandManager implements vscode.Disposable {
       if (this.notificationService) {
         this.notificationService.error("Repository manager not available");
       } else {
-        vscode.window.showErrorMessage("Repository manager not available");
+        this.showNotification("error", "Repository manager not available");
       }
     }
   }
@@ -559,7 +568,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.error("Git extension not found");
         } else {
-          vscode.window.showErrorMessage("Git extension not found");
+          this.showNotification("error", "Git extension not found");
         }
         return;
       }
@@ -580,16 +589,17 @@ export class CommandManager implements vscode.Disposable {
             headCommit,
             branch
           );
-          vscode.window.showInformationMessage(
+          this.showNotification(
+            "info",
             `Forced logging of commit: ${headCommit}`
           );
         } else {
-          vscode.window.showErrorMessage("No HEAD commit found");
+          this.showNotification("error", "No HEAD commit found");
         }
 
         this.statusManager.setTrackingStatus();
       } else {
-        vscode.window.showErrorMessage("No Git repositories found");
+        this.showNotification("error", "No Git repositories found");
         this.statusManager.setErrorStatus("No Repos");
       }
     } catch (error) {
@@ -598,7 +608,7 @@ export class CommandManager implements vscode.Disposable {
           detail: String(error),
         });
       } else {
-        vscode.window.showErrorMessage(`Error force logging commit: ${error}`);
+        this.showNotification("error", `Error force logging commit: ${error}`);
       }
     }
   }
@@ -624,7 +634,7 @@ export class CommandManager implements vscode.Disposable {
       if (this.notificationService) {
         this.notificationService.info("Pushing tracker changes...");
       } else {
-        vscode.window.showInformationMessage("Pushing tracker changes...");
+        this.showNotification("info", "Pushing tracker changes...");
       }
 
       const config = vscode.workspace.getConfiguration("commitTracker");
@@ -635,7 +645,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.error("Log file path not configured");
         } else {
-          vscode.window.showErrorMessage("Log file path not configured");
+          this.showNotification("error", "Log file path not configured");
         }
         return;
       }
@@ -651,7 +661,7 @@ export class CommandManager implements vscode.Disposable {
           detail: String(error),
         });
       } else {
-        vscode.window.showErrorMessage(`Failed to push changes: ${error}`);
+        this.showNotification("error", `Failed to push changes: ${error}`);
       }
     }
   }
@@ -768,12 +778,14 @@ export class CommandManager implements vscode.Disposable {
       }
 
       this.logService.info("=== END DEBUG INFORMATION ===");
-      vscode.window.showInformationMessage(
+      this.showNotification(
+        "info",
         "Debug information logged to output channel"
       );
     } catch (error) {
       this.logService.error(`Error getting debug information: ${error}`);
-      vscode.window.showErrorMessage(
+      this.showNotification(
+        "error",
         `Error getting debug information: ${error}`
       );
     }
@@ -789,7 +801,7 @@ export class CommandManager implements vscode.Disposable {
       if (this.notificationService) {
         this.notificationService.info("Debug logging enabled");
       } else {
-        vscode.window.showInformationMessage("Debug logging enabled");
+        this.showNotification("info", "Debug logging enabled");
       }
       this.logService.showOutput(true);
     } else {
@@ -797,7 +809,7 @@ export class CommandManager implements vscode.Disposable {
       if (this.notificationService) {
         this.notificationService.info("Debug logging disabled");
       } else {
-        vscode.window.showInformationMessage("Debug logging disabled");
+        this.showNotification("info", "Debug logging disabled");
       }
     }
   }
@@ -808,7 +820,8 @@ export class CommandManager implements vscode.Disposable {
   private async showRepositoryStatus(): Promise<void> {
     try {
       if (!this.repositoryManager) {
-        vscode.window.showErrorMessage(
+        this.showNotification(
+          "error",
           "Repository manager is not initialized."
         );
         return;
@@ -816,7 +829,8 @@ export class CommandManager implements vscode.Disposable {
 
       const statusResult = this.repositoryManager.getRepositorySummary();
       if (statusResult.isFailure()) {
-        vscode.window.showErrorMessage(
+        this.showNotification(
+          "error",
           `Failed to get repository status: ${statusResult.error.message}`
         );
         return;
@@ -834,7 +848,7 @@ export class CommandManager implements vscode.Disposable {
         details.push(`Active repository: ${status.activeRepository}`);
       }
 
-      vscode.window.showInformationMessage("Repository Status", ...details);
+      this.showNotification("info", "Repository Status", {}, ...details);
 
       // Update the status bar with a temporary message
       this.statusManager.showTemporaryMessage(
@@ -844,7 +858,8 @@ export class CommandManager implements vscode.Disposable {
       );
     } catch (error) {
       this.logService.error("Error showing repository status", error);
-      vscode.window.showErrorMessage(
+      this.showNotification(
+        "error",
         `Failed to show repository status: ${error}`
       );
     }
@@ -882,7 +897,8 @@ export class CommandManager implements vscode.Disposable {
           detail: "Cannot create Git operation terminal",
         });
       } else {
-        vscode.window.showErrorMessage(
+        this.showNotification(
+          "error",
           "FileSystemService not available. Cannot create Git operation terminal."
         );
       }
@@ -930,7 +946,8 @@ export class CommandManager implements vscode.Disposable {
           }
         );
       } else {
-        vscode.window.showErrorMessage(
+        this.showNotification(
+          "error",
           `Failed to create Git operation terminal: ${error}`
         );
       }
@@ -950,7 +967,7 @@ export class CommandManager implements vscode.Disposable {
         if (this.notificationService) {
           this.notificationService.error("File system service not available");
         } else {
-          vscode.window.showErrorMessage("File system service not available");
+          this.showNotification("error", "File system service not available");
         }
         return;
       }
@@ -962,9 +979,7 @@ export class CommandManager implements vscode.Disposable {
       if (this.notificationService) {
         this.notificationService.info("Push operation started in terminal");
       } else {
-        vscode.window.showInformationMessage(
-          "Push operation started in terminal"
-        );
+        this.showNotification("info", "Push operation started in terminal");
       }
 
       // Verify paths exist
@@ -1030,10 +1045,90 @@ sleep 5
           detail: String(error),
         });
       } else {
-        vscode.window.showErrorMessage(
+        this.showNotification(
+          "error",
           `Failed to create push operation: ${error}`
         );
       }
     }
+  }
+
+  /**
+   * Helper method to show notifications using NotificationService when available,
+   * otherwise fall back to direct vscode.window API
+   *
+   * @param type The type of notification (info, warn, error)
+   * @param message The message to display
+   * @param options Optional notification options
+   * @param actions Optional notification actions
+   * @returns Promise resolving to the selected action if any
+   */
+  private showNotification(
+    type: "info" | "warning" | "error",
+    message: string,
+    options?: {
+      modal?: boolean;
+      detail?: string;
+      priority?: NotificationPriority;
+      persistence?: NotificationPersistence;
+      trackDismissal?: boolean;
+      useMarkdown?: boolean;
+    },
+    ...actions: string[]
+  ): Promise<string | undefined> {
+    if (this.notificationService) {
+      // Use notification service
+      switch (type) {
+        case "info":
+          return this.notificationService.info(message, options, ...actions);
+        case "warning":
+          return this.notificationService.warn(message, options, ...actions);
+        case "error":
+          return this.notificationService.error(message, options, ...actions);
+        default:
+          return this.notificationService.info(message, options, ...actions);
+      }
+    } else {
+      // Fall back to vscode.window API
+      // Wrap the Thenable in a Promise to match the return type
+      return new Promise<string | undefined>((resolve) => {
+        switch (type) {
+          case "info":
+            vscode.window
+              .showInformationMessage(message, ...actions)
+              .then(resolve);
+            break;
+          case "warning":
+            vscode.window.showWarningMessage(message, ...actions).then(resolve);
+            break;
+          case "error":
+            this.showNotification("error", message, {}, ...actions).then(
+              resolve
+            );
+            break;
+          default:
+            vscode.window
+              .showInformationMessage(message, ...actions)
+              .then(resolve);
+        }
+      });
+    }
+  }
+
+  /**
+   * Helper method to show a QuickPick using NotificationService when available in the future,
+   * or fall back to direct vscode.window API
+   *
+   * @param items Items to show in the QuickPick
+   * @param options QuickPick options
+   * @returns Promise resolving to the selected item or undefined
+   */
+  private async showQuickPick(
+    items: string[] | Thenable<string[]>,
+    options?: vscode.QuickPickOptions
+  ): Promise<string | undefined> {
+    // Currently we only have the VS Code implementation
+    // In the future, the NotificationService could be extended to support this
+    return vscode.window.showQuickPick(items, options);
   }
 }
