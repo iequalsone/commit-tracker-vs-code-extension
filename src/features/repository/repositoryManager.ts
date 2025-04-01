@@ -19,6 +19,7 @@ import {
   FileWatcher,
   IFileSystemService,
 } from "../../services/interfaces/IFileSystemService";
+import { INotificationService } from "../../services/interfaces/INotificationService";
 
 /**
  * Repository status information
@@ -100,6 +101,7 @@ export class RepositoryManager extends EventEmitter {
   private configurationService?: IConfigurationService;
   private logService?: ILogService;
   private fileSystemService?: IFileSystemService;
+  private notificationService?: INotificationService;
   private _configChangeDisposable?: vscode.Disposable;
 
   private cache: {
@@ -155,7 +157,8 @@ export class RepositoryManager extends EventEmitter {
     gitService?: GitService,
     configurationService?: IConfigurationService,
     logService?: ILogService,
-    fileSystemService?: IFileSystemService
+    fileSystemService?: IFileSystemService,
+    notificationService?: INotificationService
   ) {
     super();
     this.context = context;
@@ -165,6 +168,7 @@ export class RepositoryManager extends EventEmitter {
     this.configurationService = configurationService;
     this.logService = logService;
     this.fileSystemService = fileSystemService;
+    this.notificationService = notificationService;
     this.disposableManager = DisposableManager.getInstance();
     this.lastProcessedCommit = context.globalState.get(
       "lastProcessedCommit",
@@ -288,12 +292,63 @@ export class RepositoryManager extends EventEmitter {
         break;
     }
 
+    // Use NotificationService for user-visible errors if requested
+    if (showNotification && this.notificationService) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+
+      // Create action array
+      const actionTitles: string[] = [];
+
+      if (errorType === ErrorType.CONFIGURATION) {
+        actionTitles.push("Open Settings");
+        actionTitles.push("Run Setup");
+      } else if (errorType === ErrorType.GIT_OPERATION) {
+        actionTitles.push("Open Terminal");
+      } else if (errorType === ErrorType.FILESYSTEM) {
+        actionTitles.push("Select New Location");
+      } else if (errorType === ErrorType.REPOSITORY) {
+        actionTitles.push("Refresh Status");
+      }
+
+      // Add View Logs action to all errors
+      actionTitles.push("View Logs");
+
+      // Show the error notification with callback
+      this.notificationService.showWithCallback(
+        `Error during ${operation}: ${errorMessage}`,
+        "error",
+        (action) => {
+          if (action === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "commitTracker"
+            );
+          } else if (action === "Run Setup") {
+            vscode.commands.executeCommand("commitTracker.setupTracker");
+          } else if (action === "Open Terminal") {
+            vscode.commands.executeCommand("workbench.action.terminal.new");
+          } else if (action === "Select New Location") {
+            vscode.commands.executeCommand("commitTracker.selectLogFolder");
+          } else if (action === "Refresh Status") {
+            vscode.commands.executeCommand("commitTracker.refreshStatus");
+          } else if (action === "View Logs") {
+            this.logService?.showOutput(true);
+          }
+        },
+        {
+          detail: `Error type: ${errorType}`,
+        },
+        ...actionTitles
+      );
+    }
+
     // Use the error handling service
     this.errorHandlingService.handleError(
       error,
       operation,
       errorType,
-      showNotification,
+      false, // Don't show notification through error handling service since we're handling it here
       suggestions
     );
 
@@ -667,6 +722,32 @@ Repository Path: ${commit.repoPath}\n\n`;
         );
       }
 
+      // Use NotificationService for notifications
+      if (
+        this.notificationService &&
+        this.configurationService?.showNotifications()
+      ) {
+        this.notificationService.showWithCallback(
+          `Commit tracked: ${
+            message.length > 50 ? message.substring(0, 47) + "..." : message
+          }`,
+          "info",
+          (action) => {
+            if (action === "View Log") {
+              this.emit(RepositoryEvent.COMMIT_HISTORY_UPDATED);
+              vscode.commands.executeCommand("commitTracker.showDetails");
+            } else if (action === "Push Changes") {
+              this.requestPush(this.logFilePath, trackingFilePath);
+            }
+          },
+          {
+            detail: `Repository: ${repoName}\nAuthor: ${author}\nBranch: ${branch}`,
+          },
+          "View Log",
+          "Push Changes"
+        );
+      }
+
       // Emit event that commit was processed
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commit, trackingFilePath);
 
@@ -676,6 +757,28 @@ Repository Path: ${commit.repoPath}\n\n`;
 
       return success(commit);
     } catch (error) {
+      // Use NotificationService for error notifications
+      if (this.notificationService) {
+        this.notificationService.showWithCallback(
+          `Failed to process commit: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          "error",
+          (action) => {
+            if (action === "Show Details") {
+              this.logService?.showOutput(true);
+            } else if (action === "Try Again") {
+              this.processCommit(repo, commitHash);
+            }
+          },
+          {
+            detail: `Repository: ${repo?.rootUri?.fsPath || "unknown"}`,
+          },
+          "Show Details",
+          "Try Again"
+        );
+      }
+
       this.notifyErrorStatus(
         `Failed to process commit: ${
           error instanceof Error ? error.message : String(error)
@@ -805,12 +908,37 @@ Repository Path: ${repoPath}\n\n`;
       };
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commit);
 
-      // Show notification if configured
+      // Use NotificationService for notifications if configured
       if (this.configurationService?.showNotifications()) {
-        this.sendStatusUpdate({
-          type: "normal",
-          message: "Commit logged successfully",
-        });
+        if (this.notificationService) {
+          // Use the notification service with callback
+          this.notificationService.showWithCallback(
+            "Commit logged successfully",
+            "info",
+            (action) => {
+              if (action === "Push Now") {
+                this.requestPush(this.logFilePath, trackingFilePath);
+              } else if (action === "View Details") {
+                this.emit(RepositoryEvent.COMMIT_HISTORY_UPDATED);
+                vscode.commands.executeCommand("commitTracker.showDetails");
+              }
+            },
+            {
+              detail: `Repository: ${repoName}\nCommit: ${headCommit.substring(
+                0,
+                7
+              )}`,
+            },
+            "Push Now",
+            "View Details"
+          );
+        } else {
+          // Fall back to status updates if notification service isn't available
+          this.sendStatusUpdate({
+            type: "normal",
+            message: "Commit logged successfully",
+          });
+        }
       }
 
       // Try to push changes using safe temporary file handling
@@ -855,6 +983,27 @@ Repository Path: ${repoPath}\n\n`;
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
+
+      // Use NotificationService for error notifications
+      if (this.notificationService) {
+        this.notificationService.showWithCallback(
+          `Failed to log commit details: ${errorMessage}`,
+          "error",
+          (action) => {
+            if (action === "Show Details") {
+              this.logService?.showOutput(true);
+            }
+          },
+          {
+            detail: `Repository: ${repoPath}\nCommit: ${headCommit.substring(
+              0,
+              7
+            )}`,
+          },
+          "Show Details"
+        );
+      }
+
       this.logService?.error(
         `Failed to log commit details: ${errorMessage}`,
         error
@@ -2097,11 +2246,51 @@ Repository Path: ${repoPath}\n\n`;
 
       // Notify through events if there are unpushed commits
       if (result.isSuccess() && result.value) {
+        // First emit the event for backward compatibility
         this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, true);
-        this.notifyErrorStatus(
-          "Unpushed commits",
-          "There are unpushed commits in your tracking repository"
-        );
+
+        // Get commit details for better notification
+        const detailsResult = await this.getUnpushedCommitDetails();
+        const commitCount = detailsResult.isSuccess()
+          ? detailsResult.value.count
+          : "?";
+
+        // Use NotificationService if available
+        if (
+          this.notificationService &&
+          this.configurationService?.showNotifications()
+        ) {
+          this.notificationService.showWithCallback(
+            "You have unpushed commit tracking changes",
+            "warning",
+            (action) => {
+              if (action === "Push Now") {
+                const trackingFilePath = path.join(
+                  this.logFilePath,
+                  this.logFile
+                );
+                this.requestPush(this.logFilePath, trackingFilePath);
+              } else if (action === "Details") {
+                vscode.commands.executeCommand(
+                  "commitTracker.showRepositoryStatus"
+                );
+              }
+            },
+            {
+              detail: `${commitCount} commit${
+                commitCount !== 1 ? "s" : ""
+              } waiting to be pushed to synchronize your tracking data.`,
+            },
+            "Push Now",
+            "Details"
+          );
+        } else {
+          // Legacy notification through status updates
+          this.notifyErrorStatus(
+            "Unpushed commits",
+            "There are unpushed commits in your tracking repository"
+          );
+        }
       }
 
       return result;
@@ -2264,14 +2453,101 @@ Repository Path: ${repoPath}\n\n`;
    * Request setup when configuration is missing or invalid
    */
   public requestSetup(): void {
+    // First emit the legacy event for backward compatibility
     this.emit(RepositoryEvent.SETUP_REQUESTED);
+
+    // Use NotificationService if available
+    if (this.notificationService) {
+      this.notificationService.showWithCallback(
+        "Setup required for Commit Tracker",
+        "info",
+        (action) => {
+          if (action === "Setup Now") {
+            vscode.commands.executeCommand("commitTracker.setupTracker");
+          } else if (action === "Open Documentation") {
+            vscode.env.openExternal(
+              vscode.Uri.parse(
+                "https://github.com/your-username/commit-tracker-vs-code-extension/blob/main/README.md"
+              )
+            );
+          }
+        },
+        {
+          detail:
+            "The extension needs to be configured before it can track commits.",
+        },
+        "Setup Now",
+        "Open Documentation"
+      );
+    } else {
+      // Legacy status update if notification service isn't available
+      this.sendStatusUpdate({
+        type: "warning",
+        message: "Setup required for Commit Tracker",
+      });
+
+      // Show built-in info message as fallback
+      vscode.window
+        .showInformationMessage(
+          "Setup required for Commit Tracker",
+          "Setup Now"
+        )
+        .then((selection) => {
+          if (selection === "Setup Now") {
+            vscode.commands.executeCommand("commitTracker.setupTracker");
+          }
+        });
+    }
   }
 
   /**
    * Request display of repository information
    */
   public requestRepositoryInfo(): void {
+    // First emit the legacy event for backward compatibility
     this.emit(RepositoryEvent.REPOSITORY_INFO_REQUESTED);
+
+    // Use the repository summary to get actual data
+    const summaryResult = this.getRepositorySummary();
+
+    // Use NotificationService if available
+    if (this.notificationService && summaryResult.isSuccess()) {
+      const summary = summaryResult.value;
+
+      // Build a detailed message about repositories
+      const detail = [
+        `Total Repositories: ${summary.totalRepositories}`,
+        `Tracked Repositories: ${summary.trackedRepositories}`,
+        `Repositories With Changes: ${summary.repositoriesWithChanges}`,
+      ];
+
+      if (summary.activeRepository) {
+        detail.push(`Active Repository: ${summary.activeRepository}`);
+      }
+
+      // Use showWithCallback instead of direct info call with actions
+      this.notificationService.showWithCallback(
+        "Repository Information",
+        "info",
+        (action) => {
+          if (action === "Show Details") {
+            vscode.commands.executeCommand(
+              "commitTracker.showRepositoryStatus"
+            );
+          } else if (action === "Log Current Commit") {
+            vscode.commands.executeCommand("commitTracker.logCurrentCommit");
+          }
+        },
+        {
+          detail: detail.join("\n"),
+        },
+        "Show Details",
+        "Log Current Commit"
+      );
+    } else {
+      // Legacy approach if notification service isn't available
+      vscode.commands.executeCommand("commitTracker.showRepositoryStatus");
+    }
   }
 
   /**
