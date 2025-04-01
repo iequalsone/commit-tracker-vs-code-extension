@@ -11,6 +11,7 @@ import {
 } from "../repository/repositoryManager";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
+import { INotificationService } from "../../services/interfaces/INotificationService";
 
 /**
  * Manages all extension commands and their registration
@@ -23,6 +24,7 @@ export class CommandManager implements vscode.Disposable {
   private readonly statusManager: StatusManager;
   private readonly repositoryManager: RepositoryManager;
   private fileSystemService?: IFileSystemService;
+  private notificationService?: INotificationService;
   private disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -32,7 +34,8 @@ export class CommandManager implements vscode.Disposable {
     setupManager: SetupManager,
     statusManager: StatusManager,
     repositoryManager: RepositoryManager,
-    fileSystemService?: IFileSystemService
+    fileSystemService?: IFileSystemService,
+    notificationService?: INotificationService
   ) {
     this.context = context;
     this.gitService = gitService;
@@ -41,16 +44,26 @@ export class CommandManager implements vscode.Disposable {
     this.statusManager = statusManager;
     this.repositoryManager = repositoryManager;
     this.fileSystemService = fileSystemService;
+    this.notificationService = notificationService;
 
     // Log if FileSystemService is available
     if (this.fileSystemService) {
-      this.logService.debug(
-        "CommandManager initialized with FileSystemService"
-      );
+      // Use notificationService if available, otherwise fallback to direct vscode API
+      if (this.notificationService) {
+        this.logService.debug("FileSystemService available to CommandManager");
+      } else {
+        this.logService.debug("FileSystemService available to CommandManager");
+      }
     } else {
-      this.logService.warn(
-        "CommandManager initialized without FileSystemService, some operations may not work"
-      );
+      if (this.notificationService) {
+        this.logService.warn(
+          "FileSystemService not available to CommandManager"
+        );
+      } else {
+        this.logService.warn(
+          "FileSystemService not available to CommandManager"
+        );
+      }
     }
   }
 
@@ -366,17 +379,15 @@ export class CommandManager implements vscode.Disposable {
     const success = await this.setupManager.runSetupWizard();
 
     if (success) {
-      // Use validateConfiguration() instead of validateConfig()
-      const isValidConfig = await this.setupManager.validateConfiguration();
-      if (isValidConfig) {
-        // Initialize repository manager
-        await this.repositoryManager.initialize();
-        vscode.window.showInformationMessage(
-          "Commit Tracker is now configured and active"
+      // Replace direct vscode call with notificationService
+      if (this.notificationService) {
+        this.notificationService.info(
+          "Commit Tracker setup completed successfully!"
         );
-
-        // Update status bar
-        this.statusManager.setTrackingStatus();
+      } else {
+        vscode.window.showInformationMessage(
+          "Commit Tracker setup completed successfully!"
+        );
       }
     }
   }
@@ -386,9 +397,17 @@ export class CommandManager implements vscode.Disposable {
    */
   private async resetSetup(): Promise<void> {
     await this.setupManager.resetSetup();
-    vscode.window.showInformationMessage(
-      "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
-    );
+
+    // Replace direct vscode call with notificationService
+    if (this.notificationService) {
+      this.notificationService.info(
+        "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
+      );
+    } else {
+      vscode.window.showInformationMessage(
+        "Commit Tracker setup has been reset. Run the Setup Tracking Repository command to reconfigure."
+      );
+    }
 
     // Update status bar to show configuration needed
     this.statusManager.setSetupNeededStatus();
@@ -412,43 +431,83 @@ export class CommandManager implements vscode.Disposable {
     try {
       const gitExtension =
         vscode.extensions.getExtension("vscode.git")?.exports;
-      if (gitExtension) {
-        const api = gitExtension.getAPI(1);
-        if (api && api.repositories.length > 0) {
-          const repo = api.repositories[0];
-          const repoPath = repo.rootUri.fsPath;
-          const headCommit = repo.state.HEAD?.commit;
-          const branch = repo.state.HEAD?.name || "unknown";
-
-          if (headCommit) {
-            await this.repositoryManager.processCommitDirectly(
-              repoPath,
-              headCommit,
-              branch
-            );
-            vscode.window.showInformationMessage(
-              "Manually processed current commit"
-            );
-          } else {
-            vscode.window.showErrorMessage("No HEAD commit found");
-          }
-          this.statusManager.setTrackingStatus();
+      if (!gitExtension) {
+        if (this.notificationService) {
+          this.notificationService.error("Git extension not found");
         } else {
-          const errorMsg = "No Git repositories found";
-          this.logService.error(errorMsg);
-          vscode.window.showErrorMessage(errorMsg);
-          this.statusManager.setErrorStatus("No Repos");
+          vscode.window.showErrorMessage("Git extension not found");
+        }
+        this.statusManager.setErrorStatus("Git Not Found");
+        return;
+      }
+
+      const api = gitExtension.getAPI(1);
+      if (!api) {
+        if (this.notificationService) {
+          this.notificationService.error("Git API not available");
+        } else {
+          vscode.window.showErrorMessage("Git API not available");
+        }
+        this.statusManager.setErrorStatus("Git API Error");
+        return;
+      }
+
+      const repo = api.repositories[0];
+      if (!repo) {
+        if (this.notificationService) {
+          this.notificationService.warn("No repository found");
+        } else {
+          vscode.window.showWarningMessage("No repository found");
+        }
+        this.statusManager.setErrorStatus("No Repository");
+        return;
+      }
+
+      const result = await this.repositoryManager.processCurrentRepository(
+        repo
+      );
+
+      if (result.isSuccess()) {
+        const commit = result.value;
+        this.statusManager.showCommitProcessedStatus(
+          commit.repoName,
+          commit.hash.substring(0, 7)
+        );
+        if (this.notificationService) {
+          this.notificationService.info(
+            `Commit logged: ${commit.hash.substring(0, 7)}`,
+            {
+              detail: commit.message,
+            }
+          );
+        } else {
+          vscode.window.showInformationMessage(
+            `Commit logged: ${commit.hash.substring(0, 7)}`
+          );
         }
       } else {
-        const errorMsg = "Git extension not found";
-        this.logService.error(errorMsg);
-        vscode.window.showErrorMessage(errorMsg);
-        this.statusManager.setErrorStatus("Git Not Found");
+        this.statusManager.showCommitFailedStatus(result.error);
+        if (this.notificationService) {
+          this.notificationService.error("Failed to log commit", {
+            detail: result.error.message,
+          });
+        } else {
+          vscode.window.showErrorMessage(
+            `Failed to log commit: ${result.error.message}`
+          );
+        }
       }
     } catch (error) {
-      this.logService.error(`Error logging commit: ${error}`);
-      vscode.window.showErrorMessage(`Error: ${error}`);
-      this.statusManager.setErrorStatus("Error");
+      this.statusManager.showCommitFailedStatus(
+        error instanceof Error ? error : new Error(String(error))
+      );
+      if (this.notificationService) {
+        this.notificationService.error("Error logging commit", {
+          detail: String(error),
+        });
+      } else {
+        vscode.window.showErrorMessage(`Error logging commit: ${error}`);
+      }
     }
   }
 
@@ -457,27 +516,30 @@ export class CommandManager implements vscode.Disposable {
    */
   private async startMonitoring(): Promise<void> {
     if (this.repositoryManager) {
-      this.logService.info("Manually starting commit monitoring");
-      const gitExtension =
-        vscode.extensions.getExtension("vscode.git")?.exports;
-      if (gitExtension) {
-        const api = gitExtension.getAPI(1);
-        if (api && api.repositories.length > 0) {
-          // Re-initialize repository listeners
-          await this.repositoryManager.initialize();
-          vscode.window.showInformationMessage("Commit monitoring started");
-          this.statusManager.setTrackingStatus();
+      const initResult = await this.repositoryManager.initialize();
+      if (initResult.isSuccess()) {
+        if (this.notificationService) {
+          this.notificationService.info("Commit monitoring started");
         } else {
-          vscode.window.showErrorMessage("No Git repositories found");
-          this.statusManager.setErrorStatus("No Repos");
+          vscode.window.showInformationMessage("Commit monitoring started");
         }
       } else {
-        vscode.window.showErrorMessage("Git extension not found");
-        this.statusManager.setErrorStatus("Git Not Found");
+        if (this.notificationService) {
+          this.notificationService.error("Failed to start commit monitoring", {
+            detail: initResult.error.message,
+          });
+        } else {
+          vscode.window.showErrorMessage(
+            `Failed to start commit monitoring: ${initResult.error.message}`
+          );
+        }
       }
     } else {
-      vscode.window.showErrorMessage("Repository manager not initialized");
-      this.statusManager.setErrorStatus("Not Initialized");
+      if (this.notificationService) {
+        this.notificationService.error("Repository manager not available");
+      } else {
+        vscode.window.showErrorMessage("Repository manager not available");
+      }
     }
   }
 
@@ -492,43 +554,52 @@ export class CommandManager implements vscode.Disposable {
     try {
       const gitExtension =
         vscode.extensions.getExtension("vscode.git")?.exports;
-      if (gitExtension) {
-        const api = gitExtension.getAPI(1);
-        if (api && api.repositories.length > 0) {
-          const repo = api.repositories[0];
-          const headCommit = repo.state.HEAD?.commit;
 
-          this.logService.info(`Found latest commit: ${headCommit}`);
-
-          if (headCommit) {
-            const repoPath = repo.rootUri.fsPath;
-            const branch = repo.state.HEAD?.name || "unknown";
-
-            await this.repositoryManager.processCommitDirectly(
-              repoPath,
-              headCommit,
-              branch
-            );
-            vscode.window.showInformationMessage(
-              `Forced logging of commit: ${headCommit}`
-            );
-          } else {
-            vscode.window.showErrorMessage("No HEAD commit found");
-          }
-
-          this.statusManager.setTrackingStatus();
+      if (!gitExtension) {
+        if (this.notificationService) {
+          this.notificationService.error("Git extension not found");
         } else {
-          vscode.window.showErrorMessage("No Git repositories found");
-          this.statusManager.setErrorStatus("No Repos");
+          vscode.window.showErrorMessage("Git extension not found");
         }
+        return;
+      }
+
+      const api = gitExtension.getAPI(1);
+      if (api && api.repositories.length > 0) {
+        const repo = api.repositories[0];
+        const headCommit = repo.state.HEAD?.commit;
+
+        this.logService.info(`Found latest commit: ${headCommit}`);
+
+        if (headCommit) {
+          const repoPath = repo.rootUri.fsPath;
+          const branch = repo.state.HEAD?.name || "unknown";
+
+          await this.repositoryManager.processCommitDirectly(
+            repoPath,
+            headCommit,
+            branch
+          );
+          vscode.window.showInformationMessage(
+            `Forced logging of commit: ${headCommit}`
+          );
+        } else {
+          vscode.window.showErrorMessage("No HEAD commit found");
+        }
+
+        this.statusManager.setTrackingStatus();
       } else {
-        vscode.window.showErrorMessage("Git extension not found");
-        this.statusManager.setErrorStatus("Git Not Found");
+        vscode.window.showErrorMessage("No Git repositories found");
+        this.statusManager.setErrorStatus("No Repos");
       }
     } catch (error) {
-      this.logService.error(`Error force logging: ${error}`);
-      vscode.window.showErrorMessage(`Error: ${error}`);
-      this.statusManager.setErrorStatus("Error");
+      if (this.notificationService) {
+        this.notificationService.error("Error force logging commit", {
+          detail: String(error),
+        });
+      } else {
+        vscode.window.showErrorMessage(`Error force logging commit: ${error}`);
+      }
     }
   }
 
@@ -550,126 +621,38 @@ export class CommandManager implements vscode.Disposable {
    */
   private async pushTrackerChanges(): Promise<void> {
     try {
+      if (this.notificationService) {
+        this.notificationService.info("Pushing tracker changes...");
+      } else {
+        vscode.window.showInformationMessage("Pushing tracker changes...");
+      }
+
       const config = vscode.workspace.getConfiguration("commitTracker");
       const logFilePath = config.get<string>("logFilePath");
+      const logFile = config.get<string>("logFile", "commit-tracker.log");
 
       if (!logFilePath) {
-        vscode.window.showErrorMessage("Log file path not configured");
+        if (this.notificationService) {
+          this.notificationService.error("Log file path not configured");
+        } else {
+          vscode.window.showErrorMessage("Log file path not configured");
+        }
         return;
       }
 
-      this.logService.info("Manually pushing tracking repository changes");
-      this.logService.showOutput(false);
-      this.statusManager.setProcessingStatus("Pushing...");
+      const trackingFilePath = path.join(logFilePath, logFile);
 
-      // Create a script with detailed information
-      const scriptContent = `#!/bin/bash
-# Manual push script
-echo "=== Commit Tracker Manual Push ==="
-echo "Current directory: ${logFilePath}"
-cd "${logFilePath}"
-echo "Git status:"
-git status
-echo "Pushing changes..."
-git push
-PUSH_RESULT=$?
-echo "Push complete, new status:"
-git status
-
-if [ $PUSH_RESULT -eq 0 ]; then
-  echo "Push successful!"
-else
-  echo "Push failed with status $PUSH_RESULT"
-  echo "You may need to push manually or set up credentials"
-fi
-
-echo "Terminal will close in 5 seconds..."
-sleep 5
-`;
-
-      if (this.fileSystemService) {
-        // Use FileSystemService to create the script
-        const scriptResult =
-          await this.fileSystemService.createExecutableScript(scriptContent, {
-            prefix: "git-manual-push-",
-          });
-
-        if (scriptResult.isFailure()) {
-          this.logService.error(
-            `Failed to create script: ${scriptResult.error}`
-          );
-          vscode.window.showErrorMessage(
-            `Failed to create script: ${scriptResult.error.message}`
-          );
-          return;
-        }
-
-        const scriptPath = scriptResult.value;
-
-        // Use VS Code terminal to show output
-        const terminal = vscode.window.createTerminal({
-          name: "Commit Tracker",
-          hideFromUser: false,
-          location: vscode.TerminalLocation.Panel,
-          isTransient: true,
-        });
-        terminal.show(false);
-        terminal.sendText(`bash "${scriptPath}" && exit || exit`);
-
-        // Clean up script after delay
-        setTimeout(async () => {
-          try {
-            await this.fileSystemService!.deleteFile(scriptPath);
-            this.logService.debug(`Deleted temporary script: ${scriptPath}`);
-          } catch (error) {
-            this.logService.warn(`Failed to delete temporary script: ${error}`);
-          }
-        }, 10000);
-      } else {
-        // Fallback to direct fs usage
-        const scriptPath = path.join(
-          os.tmpdir(),
-          `git-manual-push-${Date.now()}.sh`
-        );
-
-        fs.writeFileSync(scriptPath, scriptContent, { mode: 0o755 });
-
-        // Use VS Code terminal to show output
-        const terminal = vscode.window.createTerminal({
-          name: "Commit Tracker",
-          hideFromUser: false,
-          location: vscode.TerminalLocation.Panel,
-          isTransient: true,
-        });
-        terminal.show(false);
-        terminal.sendText(`bash "${scriptPath}" && exit || exit`);
-
-        // Clean up script after delay
-        setTimeout(() => {
-          try {
-            fs.unlinkSync(scriptPath);
-          } catch (e) {
-            // Ignore cleanup errors
-          }
-        }, 10000);
-      }
-
-      this.statusManager.setTrackingStatus();
-      vscode.window.showInformationMessage("Push command sent to terminal");
-
-      // Update status after delay
-      setTimeout(() => {
-        this.statusManager.updateUnpushedStatus();
-      }, 10000);
+      // Dispatch to repository manager which will then request a terminal from CommandManager
+      this.repositoryManager.requestPush(logFilePath, trackingFilePath);
     } catch (error) {
-      this.logService.error(`Manual push failed: ${error}`);
-      this.statusManager.setErrorStatus("Push Failed");
-      vscode.window.showErrorMessage(`Push failed: ${error}`);
-
-      // Restore normal status after delay
-      setTimeout(() => {
-        this.statusManager.setTrackingStatus();
-      }, 5000);
+      this.logService.error(`Failed to push changes: ${error}`);
+      if (this.notificationService) {
+        this.notificationService.error("Failed to push changes", {
+          detail: String(error),
+        });
+      } else {
+        vscode.window.showErrorMessage(`Failed to push changes: ${error}`);
+      }
     }
   }
 
@@ -802,12 +785,20 @@ sleep 5
   private toggleLogging(): void {
     const isEnabled = this.logService.toggleLogging();
     if (isEnabled) {
-      this.logService.showOutput(false);
-      vscode.window.showInformationMessage("Commit Tracker: Logging enabled");
       this.statusManager.updateLoggingStatus(true);
+      if (this.notificationService) {
+        this.notificationService.info("Debug logging enabled");
+      } else {
+        vscode.window.showInformationMessage("Debug logging enabled");
+      }
+      this.logService.showOutput(true);
     } else {
-      vscode.window.showInformationMessage("Commit Tracker: Logging disabled");
       this.statusManager.updateLoggingStatus(false);
+      if (this.notificationService) {
+        this.notificationService.info("Debug logging disabled");
+      } else {
+        vscode.window.showInformationMessage("Debug logging disabled");
+      }
     }
   }
 
@@ -886,7 +877,15 @@ sleep 5
     );
 
     if (!this.fileSystemService) {
-      this.logService.error("FileSystemService not available");
+      if (this.notificationService) {
+        this.notificationService.error("FileSystemService not available", {
+          detail: "Cannot create Git operation terminal",
+        });
+      } else {
+        vscode.window.showErrorMessage(
+          "FileSystemService not available. Cannot create Git operation terminal."
+        );
+      }
       return undefined;
     }
 
@@ -920,7 +919,21 @@ sleep 5
 
       return terminal;
     } catch (error) {
-      this.logService.error(`Error creating Git operation terminal: ${error}`);
+      this.logService.error(
+        `Failed to create Git operation terminal: ${error}`
+      );
+      if (this.notificationService) {
+        this.notificationService.error(
+          "Failed to create Git operation terminal",
+          {
+            detail: String(error),
+          }
+        );
+      } else {
+        vscode.window.showErrorMessage(
+          `Failed to create Git operation terminal: ${error}`
+        );
+      }
       return undefined;
     }
   }
@@ -933,12 +946,25 @@ sleep 5
     trackingFilePath: string
   ): Promise<void> {
     try {
+      if (!this.fileSystemService) {
+        if (this.notificationService) {
+          this.notificationService.error("File system service not available");
+        } else {
+          vscode.window.showErrorMessage("File system service not available");
+        }
+        return;
+      }
+
       this.logService.info(`Push request received for ${trackingFilePath}`);
       this.statusManager.showPushingStatus();
 
-      // Validate file paths
-      if (!this.fileSystemService) {
-        throw new Error("FileSystemService not available");
+      // Show notification when done
+      if (this.notificationService) {
+        this.notificationService.info("Push operation started in terminal");
+      } else {
+        vscode.window.showInformationMessage(
+          "Push operation started in terminal"
+        );
       }
 
       // Verify paths exist
@@ -997,14 +1023,17 @@ sleep 5
 
       this.logService.info("Push operation started in terminal");
     } catch (error) {
-      this.logService.error(`Push operation failed: ${error}`);
+      this.logService.error(`Error in handlePushRequest: ${error}`);
       this.statusManager.showPushFailedStatus();
-      vscode.window.showErrorMessage(`Push failed: ${error}`);
-
-      // Restore normal status after a delay
-      setTimeout(() => {
-        this.statusManager.setTrackingStatus();
-      }, 3000);
+      if (this.notificationService) {
+        this.notificationService.error("Failed to create push operation", {
+          detail: String(error),
+        });
+      } else {
+        vscode.window.showErrorMessage(
+          `Failed to create push operation: ${error}`
+        );
+      }
     }
   }
 }
