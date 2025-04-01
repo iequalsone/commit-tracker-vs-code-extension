@@ -178,7 +178,7 @@ Step 4: Update ExtensionManager
 [x] Set up default implementation
 
 Step 5: Refactor Existing Components
-[] Update RepositoryManager to use NotificationService
+[x] Update RepositoryManager to use NotificationService
 [] Refactor CommandManager to use the service
 [] Migrate StatusManager notification calls
 [] Update SetupManager and SetupWizard
