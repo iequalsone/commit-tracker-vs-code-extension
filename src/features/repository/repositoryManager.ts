@@ -19,7 +19,10 @@ import {
   FileWatcher,
   IFileSystemService,
 } from "../../services/interfaces/IFileSystemService";
-import { INotificationService } from "../../services/interfaces/INotificationService";
+import {
+  INotificationService,
+  NotificationPriority,
+} from "../../services/interfaces/INotificationService";
 
 /**
  * Repository status information
@@ -590,18 +593,19 @@ export class RepositoryManager extends EventEmitter {
     commitHash: string
   ): Promise<Result<Commit, Error>> {
     try {
-      if (!repo || !commitHash) {
-        return failure(new Error("Invalid repository or commit hash"));
+      const repoStatus = await this.getRepositoryStatus(repo);
+      if (repoStatus.isFailure()) {
+        return failure(repoStatus.error);
       }
 
+      let repoName = repoStatus.value.repoName;
       const repoPath = repo.rootUri?.fsPath;
       const branch = repo.state?.HEAD?.name || "unknown";
-      let repoName = path.basename(repoPath);
 
-      // Emit status update for processing
+      // Show status update
       this.notifyCommitProcessing(repoName, commitHash);
 
-      // Show processing status
+      // Show processing status via status manager if available
       if (this.statusManager) {
         this.statusManager.showCommitProcessingStatus(repoName, commitHash);
       }
@@ -616,7 +620,7 @@ export class RepositoryManager extends EventEmitter {
         return failure(new Error(`Commit already processed: ${commitHash}`));
       }
 
-      // Check if it's in the log file
+      // Check if it's already in the log file
       try {
         if (!this.fileSystemService) {
           return failure(new Error("FileSystemService is not initialized"));
@@ -722,7 +726,7 @@ Repository Path: ${commit.repoPath}\n\n`;
         );
       }
 
-      // Use NotificationService for notifications
+      // Show notification about tracked commit if configured
       if (
         this.notificationService &&
         this.configurationService?.showNotifications()
@@ -742,6 +746,8 @@ Repository Path: ${commit.repoPath}\n\n`;
           },
           {
             detail: `Repository: ${repoName}\nAuthor: ${author}\nBranch: ${branch}`,
+            priority: NotificationPriority.NORMAL,
+            useMarkdown: true,
           },
           "View Log",
           "Push Changes"
@@ -751,8 +757,10 @@ Repository Path: ${commit.repoPath}\n\n`;
       // Emit event that commit was processed
       this.emit(RepositoryEvent.COMMIT_PROCESSED, commit, trackingFilePath);
 
+      // Invalidate cache to ensure fresh data
       this.invalidateCache();
 
+      // Update status
       this.notifyCommitSuccess(repoName, commitHash);
 
       return success(commit);
@@ -773,6 +781,7 @@ Repository Path: ${commit.repoPath}\n\n`;
           },
           {
             detail: `Repository: ${repo?.rootUri?.fsPath || "unknown"}`,
+            priority: NotificationPriority.HIGH,
           },
           "Show Details",
           "Try Again"
@@ -980,38 +989,15 @@ Repository Path: ${repoPath}\n\n`;
       }
 
       return success(trackingFilePath);
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-
-      // Use NotificationService for error notifications
+    } catch (err) {
       if (this.notificationService) {
-        this.notificationService.showWithCallback(
-          `Failed to log commit details: ${errorMessage}`,
-          "error",
-          (action) => {
-            if (action === "Show Details") {
-              this.logService?.showOutput(true);
-            }
-          },
-          {
-            detail: `Repository: ${repoPath}\nCommit: ${headCommit.substring(
-              0,
-              7
-            )}`,
-          },
-          "Show Details"
-        );
+        this.notificationService.error(`Failed to log commit details`, {
+          detail: `Error: ${err instanceof Error ? err.message : String(err)}`,
+          priority: NotificationPriority.HIGH,
+        });
       }
 
-      this.logService?.error(
-        `Failed to log commit details: ${errorMessage}`,
-        error
-      );
-      this.emit(RepositoryEvent.COMMIT_FAILED, repoPath, headCommit, error);
-      return failure(
-        new Error(`Failed to log commit details: ${errorMessage}`)
-      );
+      return failure(err instanceof Error ? err : new Error(String(err)));
     }
   }
 
@@ -2242,58 +2228,44 @@ Repository Path: ${repoPath}\n\n`;
       }
 
       // Use gitService to check for unpushed commits
-      const result = await this.gitService.hasUnpushedCommits(this.logFilePath);
+      const unpushedCommits = await this.gitService.hasUnpushedCommits(
+        this.logFilePath
+      );
 
       // Notify through events if there are unpushed commits
-      if (result.isSuccess() && result.value) {
-        // First emit the event for backward compatibility
-        this.emit(RepositoryEvent.UNPUSHED_COMMITS_CHANGED, true);
+      if (unpushedCommits.isSuccess() && unpushedCommits.value) {
+        // Update status bar
+        this.statusManager?.updateUnpushedIndicator(true);
 
-        // Get commit details for better notification
-        const detailsResult = await this.getUnpushedCommitDetails();
-        const commitCount = detailsResult.isSuccess()
-          ? detailsResult.value.count
-          : "?";
-
-        // Use NotificationService if available
-        if (
-          this.notificationService &&
-          this.configurationService?.showNotifications()
-        ) {
-          this.notificationService.showWithCallback(
-            "You have unpushed commit tracking changes",
-            "warning",
-            (action) => {
+        // Show notification if we have unpushed commits
+        if (this.notificationService) {
+          this.notificationService
+            .warn(
+              "There are unpushed commits in the tracking repository",
+              {
+                priority: NotificationPriority.NORMAL,
+              },
+              "Push Now",
+              "Show Details"
+            )
+            .then((action) => {
               if (action === "Push Now") {
-                const trackingFilePath = path.join(
-                  this.logFilePath,
-                  this.logFile
-                );
-                this.requestPush(this.logFilePath, trackingFilePath);
-              } else if (action === "Details") {
+                // Execute the push command
                 vscode.commands.executeCommand(
-                  "commitTracker.showRepositoryStatus"
+                  "commitTracker.pushTrackerChanges"
                 );
+              } else if (action === "Show Details") {
+                // Show the commit details
+                vscode.commands.executeCommand("commitTracker.showDetails");
               }
-            },
-            {
-              detail: `${commitCount} commit${
-                commitCount !== 1 ? "s" : ""
-              } waiting to be pushed to synchronize your tracking data.`,
-            },
-            "Push Now",
-            "Details"
-          );
-        } else {
-          // Legacy notification through status updates
-          this.notifyErrorStatus(
-            "Unpushed commits",
-            "There are unpushed commits in your tracking repository"
-          );
+            });
         }
-      }
 
-      return result;
+        return success(true);
+      } else {
+        this.statusManager?.updateUnpushedIndicator(false);
+        return success(false);
+      }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logService?.error(
