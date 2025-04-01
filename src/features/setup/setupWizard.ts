@@ -4,6 +4,10 @@ import * as path from "path";
 import { LogService } from "../../services/logService";
 import { SetupManager } from "./setupManager";
 import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
+import {
+  INotificationService,
+  NotificationPriority,
+} from "../../services/interfaces/INotificationService";
 
 /**
  * Provides a guided setup process for the Commit Tracker extension
@@ -12,23 +16,28 @@ export class SetupWizard {
   private readonly context: vscode.ExtensionContext;
   private readonly logService: LogService;
   private fileSystemService?: IFileSystemService;
+  private notificationService?: INotificationService;
   private setupManager: SetupManager;
 
   constructor(
     context: vscode.ExtensionContext,
     logService: LogService,
-    fileSystemService?: IFileSystemService
+    fileSystemService?: IFileSystemService,
+    notificationService?: INotificationService
   ) {
     this.context = context;
     this.logService = logService;
     this.fileSystemService = fileSystemService;
+    this.notificationService = notificationService;
+
     this.setupManager = new SetupManager(
       context,
       logService,
       undefined,
       undefined,
       undefined,
-      fileSystemService
+      fileSystemService,
+      notificationService
     );
   }
 
@@ -39,12 +48,23 @@ export class SetupWizard {
   public async run(): Promise<boolean> {
     this.logService.info("Starting setup wizard");
 
-    // Show welcome message
-    const startSetup = await vscode.window.showInformationMessage(
-      "Welcome to Commit Tracker! This wizard will help you set up the extension.",
-      "Continue",
-      "Cancel"
-    );
+    // Show welcome message using notification service if available
+    let startSetup: string | undefined;
+
+    if (this.notificationService) {
+      startSetup = await this.notificationService.info(
+        "Welcome to Commit Tracker! This wizard will help you set up the extension.",
+        { priority: NotificationPriority.HIGH },
+        "Continue",
+        "Cancel"
+      );
+    } else {
+      startSetup = await vscode.window.showInformationMessage(
+        "Welcome to Commit Tracker! This wizard will help you set up the extension.",
+        "Continue",
+        "Cancel"
+      );
+    }
 
     if (startSetup !== "Continue") {
       this.logService.info("Setup canceled by user");
@@ -66,7 +86,8 @@ export class SetupWizard {
     // Mark setup as complete
     await this.context.globalState.update("setupComplete", true);
 
-    vscode.window.showInformationMessage(
+    this.showNotification(
+      "info",
       "Commit Tracker setup completed successfully!"
     );
     return true;
@@ -76,10 +97,25 @@ export class SetupWizard {
    * Set up the log repository
    */
   private async setupLogRepository(): Promise<boolean> {
+    let selection: string | undefined;
+
     const options = ["Select existing folder", "Create new folder"];
-    const selection = await vscode.window.showQuickPick(options, {
-      placeHolder: "How would you like to set up your commit tracking logs?",
-    });
+
+    if (this.notificationService) {
+      selection = await this.notificationService.showWithCallback(
+        "How would you like to set up your commit tracking logs?",
+        "info",
+        (action) => {
+          // Callback is handled in the method itself
+        },
+        { useMarkdown: true },
+        ...options
+      );
+    } else {
+      selection = await vscode.window.showQuickPick(options, {
+        placeHolder: "How would you like to set up your commit tracking logs?",
+      });
+    }
 
     if (!selection) {
       return false;
@@ -96,20 +132,22 @@ export class SetupWizard {
 
       // Verify if it's a git repo already
       if (!(await this.setupManager.verifyGitSetup(folderPath))) {
-        const initGit = await vscode.window.showInformationMessage(
-          "This folder is not a Git repository. Would you like to initialize it?",
+        this.showNotification(
+          "warning",
+          "Selected folder is not a Git repository. Would you like to initialize it?",
           "Yes",
           "No"
-        );
-
-        if (initGit === "Yes") {
-          await this.initializeGitRepo(folderPath);
-        } else {
-          vscode.window.showWarningMessage(
-            "A Git repository is required for Commit Tracker to function properly."
-          );
-          return false;
-        }
+        ).then(async (response) => {
+          if (response === "Yes") {
+            await this.initializeGitRepo(folderPath!);
+          } else {
+            this.showNotification(
+              "error",
+              "Cannot continue without a Git repository."
+            );
+            return false;
+          }
+        });
       }
     } else {
       // Create new folder option
@@ -145,48 +183,73 @@ export class SetupWizard {
     try {
       this.logService.info(`Initializing Git repository at ${folderPath}`);
 
-      // Create a new terminal for Git operations
-      const terminal = vscode.window.createTerminal({
-        name: "Commit Tracker Setup",
-        cwd: folderPath,
-      });
+      // Delegate to SetupManager's implementation
+      const result = await this.setupManager.initializeGitRepo(folderPath);
 
-      terminal.show();
-      terminal.sendText("git init");
-      terminal.sendText('git config user.name "Commit Tracker"');
-      terminal.sendText('git config user.email "commit.tracker@example.com"');
-
-      // Create initial file using FileSystemService if available
-      if (this.fileSystemService) {
-        const filePath = path.join(folderPath, "commit-tracker.log");
-        const writeResult = await this.fileSystemService.writeFile(
-          filePath,
-          "# Commit Tracker Log File\nInitialized on " +
+      if (result) {
+        // Only create the commit log file if the repo was initialized successfully
+        // Create initial file using FileSystemService if available
+        if (this.fileSystemService) {
+          const initialContent =
+            "# Commit Tracker Log\n\nInitial setup: " +
             new Date().toISOString() +
-            "\n"
-        );
+            "\n";
 
-        if (writeResult.isFailure()) {
-          this.logService.error(
-            `Failed to create initial log file: ${writeResult.error}`
+          const writeResult = await this.fileSystemService.writeFile(
+            path.join(folderPath, "commit-tracker.log"),
+            initialContent
           );
+
+          if (writeResult.isFailure()) {
+            this.logService.error(
+              "Failed to create initial log file",
+              writeResult.error
+            );
+            this.showNotification("error", "Failed to create initial log file");
+            // Continue anyway since the repo is initialized
+          }
+        } else {
+          // Fallback to direct fs usage
+          try {
+            fs.writeFileSync(
+              path.join(folderPath, "commit-tracker.log"),
+              "# Commit Tracker Log\n\nInitial setup: " +
+                new Date().toISOString() +
+                "\n"
+            );
+          } catch (err) {
+            this.logService.error("Failed to create initial log file", err);
+            this.showNotification("error", "Failed to create initial log file");
+            // Continue anyway since the repo is initialized
+          }
         }
-      } else {
-        // Fallback to terminal command
-        terminal.sendText("touch commit-tracker.log");
+
+        // Add the commit-tracker.log file to the repo
+        // Use terminal approach for consistency with SetupManager
+        const terminal = vscode.window.createTerminal({
+          name: "Commit Tracker Setup",
+          cwd: folderPath,
+        });
+
+        terminal.show();
+        terminal.sendText("git add commit-tracker.log");
+        terminal.sendText('git commit -m "Add commit tracking log file"');
+        terminal.sendText("exit");
+
+        // Wait for terminal operations to complete
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        this.showNotification(
+          "info",
+          `Git repository initialized at ${folderPath}`
+        );
       }
 
-      terminal.sendText("git add commit-tracker.log");
-      terminal.sendText('git commit -m "Initial commit for Commit Tracker"');
-      terminal.sendText("exit");
-
-      // We can't easily know when the terminal is done, so we just wait a bit
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      return true;
+      return result;
     } catch (error) {
       this.logService.error(`Error initializing Git repository: ${error}`);
-      vscode.window.showErrorMessage(
+      this.showNotification(
+        "error",
         `Failed to initialize Git repository: ${error}`
       );
       return false;
@@ -277,11 +340,21 @@ export class SetupWizard {
    * Configure notification preferences
    */
   private async configureNotifications(): Promise<void> {
+    let selection: string | undefined;
     const options = ["Yes", "No"];
-    const selection = await vscode.window.showQuickPick(options, {
-      placeHolder:
+
+    if (this.notificationService) {
+      selection = await this.notificationService.info(
         "Would you like to receive notifications when commits are tracked?",
-    });
+        { useMarkdown: true },
+        ...options
+      );
+    } else {
+      selection = await vscode.window.showQuickPick(options, {
+        placeHolder:
+          "Would you like to receive notifications when commits are tracked?",
+      });
+    }
 
     const config = vscode.workspace.getConfiguration("commitTracker");
     await config.update(
@@ -303,15 +376,25 @@ export class SetupWizard {
       "60 minutes",
     ];
 
-    const selection = await vscode.window.showQuickPick(options, {
-      placeHolder: "How often should Commit Tracker check for commits?",
-    });
+    let selection: string | undefined;
+
+    if (this.notificationService) {
+      selection = await this.notificationService.info(
+        "How often should Commit Tracker check for commits?",
+        { useMarkdown: true },
+        ...options
+      );
+    } else {
+      selection = await vscode.window.showQuickPick(options, {
+        placeHolder: "How often should Commit Tracker check for commits?",
+      });
+    }
 
     // Parse the selection to get just the number
     let minutes = 5; // Default
     if (selection) {
-      const match = selection.match(/^(\d+)/);
-      if (match) {
+      const match = selection.match(/(\d+)/);
+      if (match && match[1]) {
         minutes = parseInt(match[1], 10);
       }
     }
@@ -329,8 +412,43 @@ export class SetupWizard {
    */
   public async reset(): Promise<void> {
     await this.context.globalState.update("setupComplete", false);
-    vscode.window.showInformationMessage(
-      "Commit Tracker setup has been reset."
-    );
+    this.showNotification("info", "Commit Tracker setup has been reset.");
+  }
+
+  /**
+   * Helper method to show notifications using NotificationService if available,
+   * otherwise fall back to vscode.window
+   */
+  private showNotification(
+    type: "info" | "warning" | "error",
+    message: string,
+    ...actions: string[]
+  ): Promise<string | undefined> {
+    if (this.notificationService) {
+      switch (type) {
+        case "info":
+          return this.notificationService.info(message, {}, ...actions);
+        case "warning":
+          return this.notificationService.warn(message, {}, ...actions);
+        case "error":
+          return this.notificationService.error(message, {}, ...actions);
+      }
+    } else {
+      // Fallback to direct vscode API
+      switch (type) {
+        case "info":
+          return Promise.resolve(
+            vscode.window.showInformationMessage(message, ...actions)
+          );
+        case "warning":
+          return Promise.resolve(
+            vscode.window.showWarningMessage(message, ...actions)
+          );
+        case "error":
+          return Promise.resolve(
+            vscode.window.showErrorMessage(message, ...actions)
+          );
+      }
+    }
   }
 }
