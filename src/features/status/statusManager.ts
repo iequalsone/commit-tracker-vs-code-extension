@@ -9,6 +9,10 @@ import {
 import path from "path";
 import { IStatusManager } from "./statusManagerInterface";
 import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
+import {
+  INotificationService,
+  NotificationPriority,
+} from "../../services/interfaces/INotificationService";
 
 /**
  * Manages the status bar item and displays current tracking state
@@ -19,6 +23,7 @@ export class StatusManager implements vscode.Disposable {
   private readonly gitService: GitService;
   private readonly logService: LogService;
   private readonly configurationService?: IConfigurationService;
+  private readonly notificationService?: INotificationService;
   private updateInterval: NodeJS.Timeout | null = null;
   private disposables: vscode.Disposable[] = [];
 
@@ -27,12 +32,14 @@ export class StatusManager implements vscode.Disposable {
     gitService: GitService,
     logService: LogService,
     repositoryManager?: RepositoryManager,
-    configurationService?: IConfigurationService
+    configurationService?: IConfigurationService,
+    notificationService?: INotificationService
   ) {
     this.context = context;
     this.gitService = gitService;
     this.logService = logService;
     this.configurationService = configurationService;
+    this.notificationService = notificationService;
 
     // Create status bar item
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -474,11 +481,22 @@ export class StatusManager implements vscode.Disposable {
    * @param repoName The name of the repository
    */
   public showCommitDetectedStatus(repoName: string): void {
-    this.showTemporaryMessage(
-      `Detected commit in ${repoName}`,
-      "git-commit",
-      3000
-    );
+    this.showTemporaryMessage(`Commit detected in ${repoName}`, "git-commit");
+
+    // Use notification service if available, otherwise fall back to direct VS Code API
+    if (this.notificationService) {
+      this.notificationService.info(
+        `New commit detected in repository: ${repoName}`,
+        {
+          useMarkdown: true,
+          priority: NotificationPriority.NORMAL,
+        }
+      );
+    } else {
+      vscode.window.showInformationMessage(
+        `New commit detected in repository: ${repoName}`
+      );
+    }
   }
 
   /**
@@ -487,8 +505,10 @@ export class StatusManager implements vscode.Disposable {
    * @param hash The commit hash (shortened)
    */
   public showCommitProcessingStatus(repoName: string, hash: string): void {
-    const shortHash = hash.substring(0, 7);
-    this.setProcessingStatus(`Processing ${shortHash}`);
+    this.showTemporaryMessage(
+      `Processing commit ${hash.substring(0, 7)} in ${repoName}`,
+      "loading~spin"
+    );
   }
 
   /**
@@ -497,11 +517,24 @@ export class StatusManager implements vscode.Disposable {
    * @param hash The commit hash (shortened)
    */
   public showCommitProcessedStatus(repoName: string, hash: string): void {
-    const shortHash = hash.substring(0, 7);
-    this.showTemporaryMessage(`Commit ${shortHash} logged`, "check", 3000);
+    this.showTemporaryMessage(
+      `Commit ${hash.substring(0, 7)} processed`,
+      "check"
+    );
 
-    // After showing temporary message, update to reflect unpushed status
-    setTimeout(() => this.updateUnpushedStatus(), 3500);
+    if (this.notificationService) {
+      this.notificationService.info(
+        `Successfully processed commit ${hash.substring(0, 7)} in ${repoName}`,
+        {
+          useMarkdown: true,
+          priority: NotificationPriority.NORMAL,
+        }
+      );
+    } else {
+      vscode.window.showInformationMessage(
+        `Successfully processed commit ${hash.substring(0, 7)} in ${repoName}`
+      );
+    }
   }
 
   /**
@@ -509,59 +542,141 @@ export class StatusManager implements vscode.Disposable {
    * @param error Error message or object
    */
   public showCommitFailedStatus(error: Error | string): void {
-    const errorMessage = error instanceof Error ? error.message : error;
+    const errorMessage = typeof error === "string" ? error : error.message;
+
     this.showTemporaryMessage(
-      `Failed to log commit: ${errorMessage.substring(0, 30)}${
-        errorMessage.length > 30 ? "..." : ""
-      }`,
-      "error",
-      5000
+      `Failed to process commit: ${errorMessage}`,
+      "error"
     );
+
+    if (this.notificationService) {
+      this.notificationService.error(`Failed to process commit`, {
+        detail: errorMessage,
+        priority: NotificationPriority.HIGH,
+        modal: false,
+      });
+    } else {
+      vscode.window.showErrorMessage(
+        `Failed to process commit: ${errorMessage}`
+      );
+    }
   }
 
   /**
    * Shows a Git extension not found status
    */
   public showGitNotFoundStatus(): void {
-    this.statusBarItem.text = "$(error) Git Not Found";
-    this.statusBarItem.tooltip = "Git extension is not available";
-    this.statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground"
+    this.setStatus(
+      "$(error) Git Not Found",
+      "Git extension is not available. Please ensure Git is installed."
     );
+
+    if (this.notificationService) {
+      this.notificationService
+        .error(
+          "Git extension is not available",
+          {
+            detail:
+              "Please ensure Git is installed and the Git extension is enabled.",
+            priority: NotificationPriority.HIGH,
+          },
+          "Open Settings"
+        )
+        .then((action) => {
+          if (action === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "git"
+            );
+          }
+        });
+    } else {
+      vscode.window
+        .showErrorMessage(
+          "Git extension is not available. Please ensure Git is installed and the Git extension is enabled.",
+          "Open Settings"
+        )
+        .then((action) => {
+          if (action === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "git"
+            );
+          }
+        });
+    }
   }
 
   /**
    * Shows a no repositories status
    */
   public showNoRepositoriesStatus(): void {
-    this.statusBarItem.text = "$(error) No Git Repos";
-    this.statusBarItem.tooltip = "No Git repositories found";
-    this.statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground"
+    this.setStatus(
+      "$(info) No Git Repositories",
+      "No Git repositories found in workspace"
     );
+
+    if (this.notificationService) {
+      this.notificationService.info("No Git repositories found in workspace", {
+        detail:
+          "Open a folder containing a Git repository to use Commit Tracker.",
+        priority: NotificationPriority.NORMAL,
+      });
+    } else {
+      vscode.window.showInformationMessage(
+        "No Git repositories found in workspace. Open a folder containing a Git repository to use Commit Tracker."
+      );
+    }
   }
 
   /**
    * Shows push in progress status
    */
   public showPushingStatus(): void {
-    this.statusBarItem.text = "$(sync~spin) Pushing Logs";
-    this.statusBarItem.tooltip = "Pushing commit logs to remote";
-    this.statusBarItem.backgroundColor = undefined;
+    this.setStatus(
+      "$(sync~spin) Pushing...",
+      "Pushing changes to remote repository"
+    );
   }
 
   /**
    * Shows push failure status
    */
   public showPushFailedStatus(): void {
-    this.statusBarItem.text = "$(error) Push Failed";
-    this.statusBarItem.tooltip = "Failed to push logs";
-    this.statusBarItem.backgroundColor = new vscode.ThemeColor(
-      "statusBarItem.errorBackground"
+    this.setStatus(
+      "$(warning) Push Failed",
+      "Failed to push changes to remote repository"
     );
 
-    // Reset to normal status after a delay
-    setTimeout(() => this.updateStatus(), 5000);
+    if (this.notificationService) {
+      this.notificationService
+        .error(
+          "Failed to push changes to remote repository",
+          {
+            detail:
+              "There was an error pushing changes. Check the output panel for more details.",
+            priority: NotificationPriority.HIGH,
+          },
+          "Show Details"
+        )
+        .then((action) => {
+          if (action === "Show Details") {
+            // Show the output channel with logs
+            this.logService.showOutput(true);
+          }
+        });
+    } else {
+      vscode.window
+        .showErrorMessage(
+          "Failed to push changes to remote repository. There was an error pushing changes.",
+          "Show Details"
+        )
+        .then((action) => {
+          if (action === "Show Details") {
+            this.logService.showOutput(true);
+          }
+        });
+    }
   }
 
   /**
