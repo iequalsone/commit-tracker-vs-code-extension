@@ -181,7 +181,7 @@ Step 5: Refactor Existing Components
 [x] Update RepositoryManager to use NotificationService
 [x] Refactor CommandManager to use the service
 [x] Migrate StatusManager notification calls
-[] Update SetupManager and SetupWizard
+[x] Update SetupManager and SetupWizard
 [] Ensure all direct vscode.window.show\* calls are replaced
 
 Step 6: Testing and Documentation
