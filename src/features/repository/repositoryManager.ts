@@ -920,26 +920,9 @@ Repository Path: ${repoPath}\n\n`;
       // Use NotificationService for notifications if configured
       if (this.configurationService?.showNotifications()) {
         if (this.notificationService) {
-          // Use the notification service with callback
-          this.notificationService.showWithCallback(
-            "Commit logged successfully",
-            "info",
-            (action) => {
-              if (action === "Push Now") {
-                this.requestPush(this.logFilePath, trackingFilePath);
-              } else if (action === "View Details") {
-                this.emit(RepositoryEvent.COMMIT_HISTORY_UPDATED);
-                vscode.commands.executeCommand("commitTracker.showDetails");
-              }
-            },
-            {
-              detail: `Repository: ${repoName}\nCommit: ${headCommit.substring(
-                0,
-                7
-              )}`,
-            },
-            "Push Now",
-            "View Details"
+          this.notificationService.info(
+            `Commit logged successfully. Pushing changes...`,
+            { priority: NotificationPriority.NORMAL }
           );
         } else {
           // Fall back to status updates if notification service isn't available
@@ -2238,25 +2221,19 @@ Repository Path: ${repoPath}\n\n`;
         this.statusManager?.updateUnpushedIndicator(true);
 
         // Show notification if we have unpushed commits
-        if (this.notificationService) {
+        if (this.notificationService && unpushedCommits.value) {
           this.notificationService
             .warn(
-              "There are unpushed commits in the tracking repository",
-              {
-                priority: NotificationPriority.NORMAL,
-              },
-              "Push Now",
-              "Show Details"
+              "There are unpushed commits in the tracking repository.",
+              { priority: NotificationPriority.NORMAL },
+              "Push Changes"
             )
-            .then((action) => {
-              if (action === "Push Now") {
-                // Execute the push command
-                vscode.commands.executeCommand(
-                  "commitTracker.pushTrackerChanges"
+            .then((selection) => {
+              if (selection === "Push Changes") {
+                this.requestPush(
+                  this.logFilePath,
+                  path.join(this.logFilePath, this.logFile)
                 );
-              } else if (action === "Show Details") {
-                // Show the commit details
-                vscode.commands.executeCommand("commitTracker.showDetails");
               }
             });
         }
