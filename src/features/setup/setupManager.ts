@@ -6,6 +6,10 @@ import { GitService } from "../../services/gitService";
 import { ILogService } from "../../services/interfaces/ILogService";
 import { IConfigurationService } from "../../services/interfaces/IConfigurationService";
 import { IFileSystemService } from "../../services/interfaces/IFileSystemService";
+import {
+  INotificationService,
+  NotificationPriority,
+} from "../../services/interfaces/INotificationService";
 
 /**
  * Manages the extension setup process and configuration validation
@@ -17,6 +21,7 @@ export class SetupManager {
   private gitService?: GitService;
   private repositoryManager?: RepositoryManager;
   private fileSystemService?: IFileSystemService;
+  private notificationService?: INotificationService;
 
   constructor(
     context: vscode.ExtensionContext,
@@ -24,7 +29,8 @@ export class SetupManager {
     configurationService?: IConfigurationService,
     gitService?: GitService,
     repositoryManager?: RepositoryManager,
-    fileSystemService?: IFileSystemService
+    fileSystemService?: IFileSystemService,
+    notificationService?: INotificationService
   ) {
     this.context = context;
     this.logService = logService;
@@ -32,6 +38,7 @@ export class SetupManager {
     this.gitService = gitService;
     this.repositoryManager = repositoryManager;
     this.fileSystemService = fileSystemService;
+    this.notificationService = notificationService;
   }
 
   /**
@@ -129,29 +136,43 @@ export class SetupManager {
     this.logService.info("Running setup wizard");
 
     try {
-      // Show welcome message
-      const startSetup = await vscode.window.showInformationMessage(
-        "Welcome to Commit Tracker! Do you want to set up the extension now?",
-        "Yes",
-        "No"
-      );
+      // Show welcome message using notification service if available
+      let startSetup: string | undefined;
+
+      if (this.notificationService) {
+        startSetup = await this.notificationService.info(
+          "Welcome to Commit Tracker! Do you want to set up the extension now?",
+          { priority: NotificationPriority.HIGH },
+          "Yes",
+          "No"
+        );
+      } else {
+        // Fallback to direct vscode API
+        startSetup = await vscode.window.showInformationMessage(
+          "Welcome to Commit Tracker! Do you want to set up the extension now?",
+          "Yes",
+          "No"
+        );
+      }
 
       if (startSetup !== "Yes") {
+        this.logService.info("Setup wizard cancelled by user");
         return false;
       }
 
       // Select log folder
       const folderPath = await this.selectLogFolder();
       if (!folderPath) {
-        this.logService.info("Setup canceled - no folder selected");
+        this.logService.info("No log folder selected, setup cancelled");
         return false;
       }
 
-      // Initialize the repository (this is the new part)
+      // Initialize the repository
       const repoInitialized = await this.initializeRepository(folderPath);
       if (!repoInitialized) {
-        vscode.window.showErrorMessage(
-          "Failed to initialize repository. Please try again."
+        this.showNotification(
+          "error",
+          "Failed to initialize repository. Check logs for details."
         );
         return false;
       }
@@ -173,13 +194,14 @@ export class SetupManager {
       // Mark setup as complete
       await this.context.globalState.update("setupComplete", true);
 
-      vscode.window.showInformationMessage(
+      this.showNotification(
+        "info",
         "Commit Tracker setup completed successfully!"
       );
       return true;
     } catch (error) {
       this.logService.error("Setup wizard failed", error);
-      vscode.window.showErrorMessage("Failed to complete Commit Tracker setup");
+      this.showNotification("error", "Failed to complete Commit Tracker setup");
       return false;
     }
   }
@@ -222,6 +244,7 @@ export class SetupManager {
     const config = vscode.workspace.getConfiguration("commitTracker");
     await config.update("enabled", false, vscode.ConfigurationTarget.Global);
 
+    this.showNotification("info", "Setup has been reset");
     this.logService.info("Setup has been reset");
   }
 
@@ -287,7 +310,7 @@ export class SetupManager {
   public async initializeRepository(folderPath: string): Promise<boolean> {
     try {
       if (!this.fileSystemService) {
-        this.logService.error("FileSystemService is not initialized");
+        this.logService.error("No file system service available");
         return false;
       }
 
@@ -299,69 +322,76 @@ export class SetupManager {
       );
       if (folderExistsResult.isFailure()) {
         this.logService.error(
-          `Error checking if folder exists: ${folderExistsResult.error}`
+          "Failed to check if folder exists",
+          folderExistsResult.error
         );
         return false;
       }
 
       if (!folderExistsResult.value) {
-        this.logService.error(`Folder does not exist: ${folderPath}`);
+        this.showNotification("error", `Folder ${folderPath} does not exist`);
         return false;
       }
 
       // Create default log file if it doesn't exist
-      const logFile = path.join(folderPath, "commit-tracker.log");
+      const logFile = "commit-tracker.log";
+      const logFilePath = path.join(folderPath, logFile);
 
-      const fileExistsResult = await this.fileSystemService.exists(logFile);
-      if (fileExistsResult.isFailure()) {
-        this.logService.error(
-          `Error checking if log file exists: ${fileExistsResult.error}`
-        );
-        return false;
-      }
-
-      if (!fileExistsResult.value) {
+      const fileExistsResult = await this.fileSystemService.exists(logFilePath);
+      if (fileExistsResult.isFailure() || !fileExistsResult.value) {
+        // Create initial log file
+        const initialContent =
+          "# Commit Tracker Log\n\nThis file tracks your Git commits.\n\n";
         const writeResult = await this.fileSystemService.writeFile(
-          logFile,
-          "# Commit Tracker Log File\n\n"
+          logFilePath,
+          initialContent
         );
 
         if (writeResult.isFailure()) {
-          this.logService.error(
-            `Error creating log file: ${writeResult.error}`
-          );
+          this.logService.error("Failed to create log file", writeResult.error);
           return false;
         }
+      }
 
-        this.logService.info(`Created log file at ${logFile}`);
+      // Initialize Git repository if needed
+      const isGitRepo = await this.gitService?.isGitRepository(folderPath);
+      if (!isGitRepo) {
+        const repoInitialized = await this.initializeGitRepo(folderPath);
+        if (!repoInitialized) {
+          this.showNotification("error", "Failed to initialize Git repository");
+          return false;
+        }
       }
 
       // Update configuration
       if (this.configurationService) {
         const result = await this.configurationService.setTrackerRepo(
           folderPath,
-          "commit-tracker.log"
+          logFile
         );
-
         if (result.isFailure()) {
-          this.logService.error(
-            `Error updating configuration: ${result.error}`
-          );
+          this.logService.error("Failed to update configuration", result.error);
           return false;
         }
       } else {
-        // Fall back to direct configuration update
+        // Fallback to direct configuration update
         const config = vscode.workspace.getConfiguration("commitTracker");
         await config.update(
           "logFilePath",
           folderPath,
           vscode.ConfigurationTarget.Global
         );
+        await config.update(
+          "logFile",
+          logFile,
+          vscode.ConfigurationTarget.Global
+        );
       }
 
+      this.showNotification("info", `Repository initialized at ${folderPath}`);
       return true;
     } catch (error) {
-      this.logService.error(`Failed to initialize repository: ${error}`);
+      this.logService.error("Failed to initialize repository", error);
       return false;
     }
   }
@@ -449,6 +479,43 @@ export class SetupManager {
         `Failed to initialize Git repository: ${error}`
       );
       return false;
+    }
+  }
+
+  /**
+   * Helper method to show notifications using NotificationService if available,
+   * otherwise fall back to vscode.window
+   */
+  private showNotification(
+    type: "info" | "warning" | "error",
+    message: string,
+    ...actions: string[]
+  ): Promise<string | undefined> {
+    if (this.notificationService) {
+      switch (type) {
+        case "info":
+          return this.notificationService.info(message, {}, ...actions);
+        case "warning":
+          return this.notificationService.warn(message, {}, ...actions);
+        case "error":
+          return this.notificationService.error(message, {}, ...actions);
+      }
+    } else {
+      // Fallback to direct vscode API
+      switch (type) {
+        case "info":
+          return Promise.resolve(
+            vscode.window.showInformationMessage(message, ...actions)
+          );
+        case "warning":
+          return Promise.resolve(
+            vscode.window.showWarningMessage(message, ...actions)
+          );
+        case "error":
+          return Promise.resolve(
+            vscode.window.showErrorMessage(message, ...actions)
+          );
+      }
     }
   }
 }
