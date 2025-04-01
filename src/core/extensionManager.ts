@@ -91,37 +91,41 @@ export class ExtensionManager {
       this.gitService,
       this.logService,
       undefined,
-      this.configurationService
+      this.configurationService,
+      this.notificationService
     );
 
     this.setupManager = new SetupManager(
-      context,
+      this.context,
       this.logService,
       this.configurationService,
       this.gitService,
       undefined,
-      this.fileSystemService
+      this.fileSystemService,
+      this.notificationService
     );
 
     this.repositoryManager = new RepositoryManager(
-      context,
+      this.context,
       this.statusManager,
       undefined,
       this.errorHandlingService,
       this.gitService,
       this.configurationService,
       this.logService,
-      this.fileSystemService
+      this.fileSystemService,
+      this.notificationService
     );
 
     this.commandManager = new CommandManager(
-      context,
+      this.context,
       this.gitService,
       this.logService,
       this.setupManager,
       this.statusManager,
       this.repositoryManager,
-      this.fileSystemService
+      this.fileSystemService,
+      this.notificationService
     );
 
     // Register disposables
@@ -163,8 +167,8 @@ export class ExtensionManager {
       if (firstRun) {
         this.notificationService.info(
           "Commit Tracker extension is now active",
-          "Get started by setting up your tracking repository",
-          [{ title: "Run Setup", action: "commitTracker.setupTracker" }]
+          { detail: "Get started by setting up your tracking repository" },
+          "Run Setup"
         );
         await this.context.globalState.update("firstRun", false);
       }
