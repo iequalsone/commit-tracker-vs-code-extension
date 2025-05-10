@@ -1,0 +1,50 @@
+Based on this implementation plan, let's implement the next part of Phase 4: Service Refinement - Create any other needed services.
+
+Please review extension.ts.bak, RepositoryManager.ts.bak, commandManager.ts gitService.ts.bak and gitService.ts to ensure we're not losing any functionality.
+
+Any updates for the Reposiroty Manager will go in repositoryManager.ts. RepositoryManager.ts.bak is the old file which includes all the functionality. Please cross-reference to ensure we're not missing anything.
+
+gitService.ts.bak is the old file that includes all the gitService commands. gitService.ts is the new file.
+
+Please only show the code that needs to be updated and where to update it, instead of outputting the entire file.
+
+RepositoryManager.ts.bak
+implementation.md
+repositoryManager.ts
+commandManager.ts
+extensionManager.ts
+setupManager.ts
+statusManager.ts
+setupWizard.ts
+gitService.ts.bak
+gitService.ts
+githubService.ts
+
+
+----------------------------------
+
+Based on this implementation plan, let's implement the next part.
+
+Step 7: Add Enhanced Functionality:
+- Implement file watcher capabilities.
+
+DO NOT AUTOMATICALLY CONTINUE TO THE NEXT STEP;
+
+Any updates for the Reposiroty Manager will go in repositoryManager.ts. RepositoryManager.ts.bak is the old file which includes all the functionality. Please cross-reference to ensure we're not missing anything.
+
+gitService.ts.bak is the old file that includes all the gitService commands. gitService.ts is the new file.
+
+Please only show the code that needs to be updated and where to update it, instead of outputting the entire file.
+
+Integration Strategy For each service:
+- Create service interface in /services/interfaces
+- Implement default service implementation in /services
+- Update ExtensionManager to provide these services
+- Refactor existing code to use the new services
+- Ensure proper unit tests for isolated functionality
+
+Cross-Cutting Concerns
+- Use dependency injection pattern consistently
+- Design for testability with interfaces/mocks
+- Add optional caching where appropriate
+- Maintain a clear separation of concerns

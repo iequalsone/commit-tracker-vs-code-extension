@@ -66,6 +66,10 @@
       {
         "command": "commit-tracker.resetSetup",
         "title": "Commit Tracker: Reset Setup Configuration"
+      },
+      {
+        "command": "commitTracker.manageCacheStatus",
+        "title": "Commit Tracker: Show Cache Status"
       }
     ],
     "configuration": {
@@ -130,13 +134,17 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
+    "@types/glob": "^8.1.0",
+    "axios": "^1.6.0",
+    "glob": "^11.0.1",
     "shell-escape": "^0.2.0",
     "simple-git": "^3.0.0",
-    "axios": "^1.6.0"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/node": "20.x",
     "@types/shell-escape": "^0.2.3",
+    "@types/uuid": "^10.0.0",
     "@types/vscode": "^1.96.0",
     "@typescript-eslint/eslint-plugin": "^8.17.0",
     "@typescript-eslint/parser": "^8.17.0",

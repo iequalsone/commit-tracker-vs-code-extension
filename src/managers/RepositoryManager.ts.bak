@@ -7,7 +7,7 @@ import {
   getRepoNameFromRemote,
   pullChanges,
   pushChangesWithShellScript,
-} from "../services/gitService";
+} from "../services/gitService.ts.bak";
 import {
   ensureDirectoryExists,
   appendToFile,
@@ -204,36 +204,47 @@ export class RepositoryManager {
   /**
    * Process the current repository for the manual logging command
    * @param repo The repository to process
-   * @returns A promise that resolves when the repository has been processed
+   * @returns Result indicating success or failure
    */
-  public async processCurrentRepository(repo: any): Promise<void> {
+  public async processCurrentRepository(
+    repo: any
+  ): Promise<Result<Commit, Error>> {
     logInfo("Manually processing repository");
 
     if (!repo) {
-      logError("Repository object is null or undefined");
-      return;
+      return failure(new Error("Repository object is null or undefined"));
     }
 
     if (!repo.state) {
-      logError("Repository state is null or undefined");
-      return;
+      return failure(new Error("Repository state is null or undefined"));
     }
 
     if (!repo.state.HEAD) {
-      logError("Repository HEAD is null or undefined");
-      return;
+      return failure(new Error("Repository HEAD is null or undefined"));
     }
 
+    const headCommit = repo.state.HEAD?.commit;
+    const branch = repo.state.HEAD?.name;
+    const repoPath = repo.rootUri.fsPath;
+
     logInfo(
-      `Repository info - Path: ${repo.rootUri?.fsPath || "unknown"}, Commit: ${
-        repo.state.HEAD?.commit || "unknown"
-      }, Branch: ${repo.state.HEAD?.name || "unknown"}`
+      `Repository info - Path: ${repoPath || "unknown"}, Commit: ${
+        headCommit || "unknown"
+      }, Branch: ${branch || "unknown"}`
     );
 
-    // Use the existing processRepositoryChange method to handle the logic
-    await this.processRepositoryChange(repo);
+    if (!headCommit) {
+      return failure(new Error("No HEAD commit found"));
+    }
 
-    logInfo("Manual repository processing complete");
+    // Skip excluded branches
+    if (this.excludedBranches.includes(branch)) {
+      return failure(
+        new Error(`Skipping logging for excluded branch: ${branch}`)
+      );
+    }
+
+    return await this.processCommit(repo, headCommit);
   }
 
   private async processRepositoryChange(repo: any): Promise<void> {
